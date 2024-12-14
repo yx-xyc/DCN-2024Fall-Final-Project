@@ -1,4 +1,4 @@
-package edu.wisc.cs.sdn.apps.loadbalancer;
+package edu.nyu.cs.sdn.apps.loadbalancer;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -12,8 +12,8 @@ import org.openflow.protocol.OFType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import edu.wisc.cs.sdn.apps.l3routing.IL3Routing;
-import edu.wisc.cs.sdn.apps.util.ArpServer;
+import edu.nyu.cs.sdn.apps.l3routing.IL3Routing;
+import edu.nyu.cs.sdn.apps.util.ArpServer;
 
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
@@ -32,8 +32,7 @@ import net.floodlightcontroller.devicemanager.internal.DeviceManagerImpl;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.util.MACAddress;
 
-public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
-		IOFMessageListener
+public class LoadBalancer implements IFloodlightModule, IOFSwitchListener, IOFMessageListener
 {
 	public static final String MODULE_NAME = LoadBalancer.class.getSimpleName();
 	
