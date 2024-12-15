@@ -1,9 +1,9 @@
-package edu.wisc.cs.sdn.apps.sps;
+package edu.nyu.cs.sdn.apps.sps;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-import edu.wisc.cs.sdn.apps.util.SwitchCommands;
+import edu.nyu.cs.sdn.apps.util.SwitchCommands;
 import net.floodlightcontroller.packet.Ethernet;
 import org.openflow.protocol.OFMatch;
 import org.openflow.protocol.action.OFAction;
@@ -13,7 +13,7 @@ import org.openflow.protocol.instruction.OFInstructionApplyActions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import edu.wisc.cs.sdn.apps.util.Host;
+import edu.nyu.cs.sdn.apps.util.Host;
 
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFSwitch;
