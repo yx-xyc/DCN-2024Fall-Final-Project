@@ -22,14 +22,13 @@ public class RoutingManager {
         this.flowTableId = flowTableId;
     }
 
-    // Inner class to represent a network path
     private static class Path {
         private final List<Long> switchIds;
         private final List<Integer> ports;
 
         public Path() {
-            this.switchIds = new ArrayList<>();
-            this.ports = new ArrayList<>();
+            this.switchIds = new ArrayList<Long>();
+            this.ports = new ArrayList<Integer>();
         }
 
         public void addNode(long switchId, int port) {
@@ -42,44 +41,48 @@ public class RoutingManager {
         }
     }
 
-    // Inner class to represent the network graph
     private static class Graph {
         private final Map<Long, Map<Long, Integer>> adjacencyList;
         private final Map<Long, Map<Long, Integer>> portMap;
 
         public Graph() {
-            this.adjacencyList = new HashMap<>();
-            this.portMap = new HashMap<>();
+            this.adjacencyList = new HashMap<Long, Map<Long, Integer>>();
+            this.portMap = new HashMap<Long, Map<Long, Integer>>();
         }
 
         public void addNode(long nodeId) {
-            adjacencyList.putIfAbsent(nodeId, new HashMap<>());
-            portMap.putIfAbsent(nodeId, new HashMap<>());
+            if (!adjacencyList.containsKey(nodeId)) {
+                adjacencyList.put(nodeId, new HashMap<Long, Integer>());
+                portMap.put(nodeId, new HashMap<Long, Integer>());
+            }
         }
 
         public void addEdge(long src, long dst, int srcPort, int dstPort) {
-            adjacencyList.get(src).put(dst, 1); // Weight of 1 for all edges
-            adjacencyList.get(dst).put(src, 1); // Add reverse edge
+            adjacencyList.get(src).put(dst, 1);
+            adjacencyList.get(dst).put(src, 1);
             portMap.get(src).put(dst, srcPort);
             portMap.get(dst).put(src, dstPort);
         }
 
         public Map<Long, Path> computeShortestPaths(long source) {
-            Map<Long, Integer> distances = new HashMap<>();
-            Map<Long, Long> previousNode = new HashMap<>();
-            Map<Long, Path> paths = new HashMap<>();
-            PriorityQueue<Long> queue = new PriorityQueue<>(
-                    (a, b) -> distances.getOrDefault(a, Integer.MAX_VALUE)
-                            .compareTo(distances.getOrDefault(b, Integer.MAX_VALUE)));
+            final Map<Long, Integer> distances = new HashMap<Long, Integer>();
+            Map<Long, Long> previousNode = new HashMap<Long, Long>();
+            Map<Long, Path> paths = new HashMap<Long, Path>();
 
-            // Initialize distances
+            PriorityQueue<Long> queue = new PriorityQueue<Long>(10, new Comparator<Long>() {
+                public int compare(Long a, Long b) {
+                    Integer distA = distances.containsKey(a) ? distances.get(a) : Integer.MAX_VALUE;
+                    Integer distB = distances.containsKey(b) ? distances.get(b) : Integer.MAX_VALUE;
+                    return distA.compareTo(distB);
+                }
+            });
+
             for (Long node : adjacencyList.keySet()) {
                 distances.put(node, Integer.MAX_VALUE);
             }
             distances.put(source, 0);
             queue.add(source);
 
-            // Dijkstra's algorithm
             while (!queue.isEmpty()) {
                 long current = queue.poll();
 
@@ -88,7 +91,7 @@ public class RoutingManager {
                     int weight = neighbor.getValue();
                     int newDist = distances.get(current) + weight;
 
-                    if (newDist < distances.getOrDefault(next, Integer.MAX_VALUE)) {
+                    if (newDist < (distances.containsKey(next) ? distances.get(next) : Integer.MAX_VALUE)) {
                         distances.put(next, newDist);
                         previousNode.put(next, current);
                         queue.add(next);
@@ -96,15 +99,13 @@ public class RoutingManager {
                 }
             }
 
-            // Construct paths
             for (long node : adjacencyList.keySet()) {
                 if (node != source && distances.get(node) < Integer.MAX_VALUE) {
                     Path path = new Path();
                     long current = node;
-                    Stack<Long> stack = new Stack<>();
-                    Stack<Integer> portStack = new Stack<>();
+                    Stack<Long> stack = new Stack<Long>();
+                    Stack<Integer> portStack = new Stack<Integer>();
 
-                    // Traverse from destination to source
                     while (current != source) {
                         long prev = previousNode.get(current);
                         stack.push(current);
@@ -113,7 +114,6 @@ public class RoutingManager {
                     }
                     stack.push(source);
 
-                    // Build path in correct order
                     while (!stack.isEmpty()) {
                         long switchId = stack.pop();
                         int port = portStack.isEmpty() ? -1 : portStack.pop();
@@ -133,12 +133,10 @@ public class RoutingManager {
             return;
         }
 
-        // Create match for the host's MAC address
         OFMatch match = new OFMatch();
         match.setDataLayerType(Ethernet.TYPE_IPv4);
         match.setDataLayerDestination(host.getMACAddress());
 
-        // Remove flow rules from all switches
         for (IOFSwitch sw : switches) {
             try {
                 SwitchCommands.removeRules(sw, flowTableId, match);
@@ -152,46 +150,36 @@ public class RoutingManager {
     }
 
     public void handleTopologyUpdate(Collection<IOFSwitch> switches, Collection<Link> links, Collection<Host> hosts) {
-        // Create graph representation
         Graph graph = new Graph();
 
-        // Add switches as nodes
         for (IOFSwitch sw : switches) {
             graph.addNode(sw.getId());
         }
 
-        // Add links as edges
         for (Link link : links) {
             graph.addEdge(link.getSrc(), link.getDst(), link.getSrcPort(), link.getDstPort());
         }
 
-        // For each host
         for (Host host : hosts) {
             if (!host.isAttachedToSwitch()) {
                 continue;
             }
 
-            // Get host's attachment point
             IOFSwitch hostSwitch = host.getSwitch();
             int hostPort = host.getPort();
 
-            // Create match for the host's MAC address
             OFMatch match = new OFMatch();
             match.setDataLayerType(Ethernet.TYPE_IPv4);
             match.setDataLayerDestination(host.getMACAddress());
 
-            // Compute shortest paths from all switches to the host's switch
             Map<Long, Path> paths = graph.computeShortestPaths(hostSwitch.getId());
 
-            // Install flow rules on each switch
             for (IOFSwitch sw : switches) {
-                // Skip if no path exists
                 Path path = paths.get(sw.getId());
                 if (path == null) {
                     continue;
                 }
 
-                // Get output port for next hop
                 int outputPort;
                 if (sw.getId() == hostSwitch.getId()) {
                     outputPort = hostPort;
@@ -199,12 +187,10 @@ public class RoutingManager {
                     outputPort = path.getNextHopPort();
                 }
 
-                // Create output action
                 OFActionOutput action = new OFActionOutput(outputPort);
                 List<OFAction> actions = new ArrayList<OFAction>();
                 actions.add(action);
 
-                // Install flow rule
                 try {
                     SwitchCommands.installRule(sw, flowTableId,
                             SwitchCommands.DEFAULT_PRIORITY, match, actions);
