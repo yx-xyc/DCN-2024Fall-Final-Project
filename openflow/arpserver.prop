@@ -8,4 +8,4 @@ net.floodlightcontroller.devicemanager.internal.DefaultEntityClassifier,\
 net.floodlightcontroller.linkdiscovery.internal.LinkDiscoveryManager,\
 net.floodlightcontroller.topology.TopologyManager,\
 net.floodlightcontroller.perfmon.PktInProcessingTime,\
-edu.brown.cs.sdn.apps.util.ArpServer
+edu.wisc.cs.sdn.apps.util.ArpServer
