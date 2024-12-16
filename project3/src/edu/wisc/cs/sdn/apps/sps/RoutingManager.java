@@ -6,6 +6,8 @@ import net.floodlightcontroller.routing.Link;
 import org.openflow.protocol.OFMatch;
 import org.openflow.protocol.action.OFAction;
 import org.openflow.protocol.action.OFActionOutput;
+import org.openflow.protocol.instruction.OFInstruction;
+import org.openflow.protocol.instruction.OFInstructionApplyActions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import edu.wisc.cs.sdn.apps.util.Host;
@@ -22,6 +24,7 @@ public class RoutingManager {
         this.flowTableId = flowTableId;
     }
 
+    // Path and Graph inner classes remain the same...
     private static class Path {
         private final List<Long> switchIds;
         private final List<Integer> ports;
@@ -135,7 +138,14 @@ public class RoutingManager {
 
         OFMatch match = new OFMatch();
         match.setDataLayerType(Ethernet.TYPE_IPv4);
-        match.setDataLayerDestination(host.getMACAddress());
+        // Convert long MAC to byte array
+        byte[] macBytes = new byte[6];
+        long mac = host.getMACAddress();
+        for (int i = 5; i >= 0; i--) {
+            macBytes[i] = (byte) (mac & 0xFF);
+            mac >>= 8;
+        }
+        match.setDataLayerDestination(macBytes);
 
         for (IOFSwitch sw : switches) {
             try {
@@ -170,7 +180,14 @@ public class RoutingManager {
 
             OFMatch match = new OFMatch();
             match.setDataLayerType(Ethernet.TYPE_IPv4);
-            match.setDataLayerDestination(host.getMACAddress());
+            // Convert long MAC to byte array
+            byte[] macBytes = new byte[6];
+            long mac = host.getMACAddress();
+            for (int i = 5; i >= 0; i--) {
+                macBytes[i] = (byte) (mac & 0xFF);
+                mac >>= 8;
+            }
+            match.setDataLayerDestination(macBytes);
 
             Map<Long, Path> paths = graph.computeShortestPaths(hostSwitch.getId());
 
@@ -191,9 +208,15 @@ public class RoutingManager {
                 List<OFAction> actions = new ArrayList<OFAction>();
                 actions.add(action);
 
+                // Create instruction from action
+                OFInstructionApplyActions instruction = new OFInstructionApplyActions();
+                instruction.setActions(actions);
+                List<OFInstruction> instructions = new ArrayList<OFInstruction>();
+                instructions.add(instruction);
+
                 try {
                     SwitchCommands.installRule(sw, flowTableId,
-                            SwitchCommands.DEFAULT_PRIORITY, match, actions);
+                            SwitchCommands.DEFAULT_PRIORITY, match, instructions);
                     log.info(String.format("Installed flow rule on switch %s to route to host %s",
                             sw.getStringId(), host.getName()));
                 } catch (IOException e) {
