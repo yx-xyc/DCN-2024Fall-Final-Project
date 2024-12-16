@@ -74,8 +74,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
         
         /*********************************************************************/
         /* TODO: Initialize other class variables, if necessary              */
-        byte flowTableId = Byte.parseByte(config.get("table"));
-		this.routingManager = new RoutingManager(flowTableId);
+		this.routingManager = new RoutingManager(this.table);
         /*********************************************************************/
 	}
 
@@ -138,7 +137,10 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			
 			/*****************************************************************/
 			/* TODO: Update routing: add rules to route to new host          */
-			routingManager.handleTopologyUpdate(getSwitches().values(), getLinks(), getHosts());
+			routingManager.handleTopologyUpdate(
+					getSwitches().values(),
+					getLinks(),
+					getHosts());
 			/*****************************************************************/
 		}
 	}
@@ -162,7 +164,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: remove rules to route to host               */
-		
+		routingManager.removeFlowRules(host, getSwitches().values());
 		/*********************************************************************/
 	}
 
@@ -190,7 +192,11 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change rules to route to host               */
-		
+		routingManager.handleTopologyUpdate(
+				getSwitches().values(),
+				getLinks(),
+				getHosts()
+		);
 		/*********************************************************************/
 	}
 	
@@ -206,7 +212,11 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-
+		routingManager.handleTopologyUpdate(
+				getSwitches().values(),
+				getLinks(),
+				getHosts()
+		);
 		/*********************************************************************/
 	}
 
@@ -222,7 +232,11 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		
+		routingManager.handleTopologyUpdate(
+				getSwitches().values(),
+				getLinks(),
+				getHosts()
+		);
 		/*********************************************************************/
 	}
 
@@ -253,7 +267,11 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		
+		routingManager.handleTopologyUpdate(
+				getSwitches().values(),
+				getLinks(),
+				getHosts()
+		);
 		/*********************************************************************/
 	}
 
