@@ -52,6 +52,8 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
     // Map of hosts to devices
     private Map<IDevice,Host> knownHosts;
 
+	private RoutingManager routingManager;
+
 	/**
      * Loads dependencies and initializes data structures.
      */
@@ -72,7 +74,8 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
         
         /*********************************************************************/
         /* TODO: Initialize other class variables, if necessary              */
-        
+        byte flowTableId = Byte.parseByte(config.get("table"));
+		this.routingManager = new RoutingManager(flowTableId);
         /*********************************************************************/
 	}
 
@@ -135,7 +138,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			
 			/*****************************************************************/
 			/* TODO: Update routing: add rules to route to new host          */
-			
+			routingManager.handleTopologyUpdate(getSwitches().values(), getLinks(), getHosts());
 			/*****************************************************************/
 		}
 	}
