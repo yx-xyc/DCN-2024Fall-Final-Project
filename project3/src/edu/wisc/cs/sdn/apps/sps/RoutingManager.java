@@ -13,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import edu.wisc.cs.sdn.apps.util.Host;
 import edu.wisc.cs.sdn.apps.util.SwitchCommands;
 
-import java.io.IOException;
 import java.util.*;
 
 public class RoutingManager {
@@ -24,7 +23,7 @@ public class RoutingManager {
         this.flowTableId = flowTableId;
     }
 
-    // Path and Graph inner classes remain the same...
+    // Path and Graph inner classes remain exactly the same...
     private static class Path {
         private final List<Long> switchIds;
         private final List<Integer> ports;
@@ -138,7 +137,6 @@ public class RoutingManager {
 
         OFMatch match = new OFMatch();
         match.setDataLayerType(Ethernet.TYPE_IPv4);
-        // Convert long MAC to byte array
         byte[] macBytes = new byte[6];
         long mac = host.getMACAddress();
         for (int i = 5; i >= 0; i--) {
@@ -148,13 +146,13 @@ public class RoutingManager {
         match.setDataLayerDestination(macBytes);
 
         for (IOFSwitch sw : switches) {
-            try {
-                SwitchCommands.removeRules(sw, flowTableId, match);
+            boolean removed = SwitchCommands.removeRules(sw, flowTableId, match);
+            if (removed) {
                 log.info(String.format("Removed flow rules for host %s from switch %s",
                         host.getName(), sw.getStringId()));
-            } catch (IOException e) {
+            } else {
                 log.error(String.format("Failed to remove flow rules for host %s from switch %s",
-                        host.getName(), sw.getStringId()), e);
+                        host.getName(), sw.getStringId()));
             }
         }
     }
@@ -180,7 +178,6 @@ public class RoutingManager {
 
             OFMatch match = new OFMatch();
             match.setDataLayerType(Ethernet.TYPE_IPv4);
-            // Convert long MAC to byte array
             byte[] macBytes = new byte[6];
             long mac = host.getMACAddress();
             for (int i = 5; i >= 0; i--) {
@@ -208,20 +205,19 @@ public class RoutingManager {
                 List<OFAction> actions = new ArrayList<OFAction>();
                 actions.add(action);
 
-                // Create instruction from action
                 OFInstructionApplyActions instruction = new OFInstructionApplyActions();
                 instruction.setActions(actions);
                 List<OFInstruction> instructions = new ArrayList<OFInstruction>();
                 instructions.add(instruction);
 
-                try {
-                    SwitchCommands.installRule(sw, flowTableId,
-                            SwitchCommands.DEFAULT_PRIORITY, match, instructions);
+                boolean installed = SwitchCommands.installRule(sw, flowTableId,
+                        SwitchCommands.DEFAULT_PRIORITY, match, instructions);
+                if (installed) {
                     log.info(String.format("Installed flow rule on switch %s to route to host %s",
                             sw.getStringId(), host.getName()));
-                } catch (IOException e) {
+                } else {
                     log.error(String.format("Failed to install flow rule on switch %s",
-                            sw.getStringId()), e);
+                            sw.getStringId()));
                 }
             }
         }
