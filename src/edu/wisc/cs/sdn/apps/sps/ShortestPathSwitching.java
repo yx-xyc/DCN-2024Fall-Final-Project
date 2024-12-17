@@ -55,7 +55,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
     // Map of hosts to devices
     private Map<IDevice,Host> knownHosts;
 
-	private static final boolean isLogging = false;
+	private static final boolean isLogging = true;
 
 	/**
      * Loads dependencies and initializes data structures.
