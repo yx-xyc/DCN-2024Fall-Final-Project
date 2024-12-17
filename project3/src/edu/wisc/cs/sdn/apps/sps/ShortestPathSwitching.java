@@ -132,47 +132,50 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 	private void configureFlowTable(Host host) {
 		if(host.getIPv4Address() == null) return;
 
-		// Create match for destination IP
-		OFMatch match = new OFMatch();
-		match.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
-		match.setNetworkDestination(host.getIPv4Address());
+		// Match for IP packets to host
+		OFMatch matchIP = new OFMatch();
+		matchIP.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
+		matchIP.setNetworkDestination(host.getIPv4Address());
+
+		// Match for ARP packets
+		OFMatch matchARP = new OFMatch();
+		matchARP.setDataLayerType(OFMatch.ETH_TYPE_ARP);
 
 		// Get all switches
 		Map<Long, IOFSwitch> switches = getSwitches();
 
-		// For each switch
 		for(IOFSwitch sw : switches.values()) {
-			// Remove existing rules
-			SwitchCommands.removeRules(sw, table, match);
+			// Install table 0 rules first
+			// Rule to send ARP to controller
+			OFInstructionApplyActions arpInstruction = new OFInstructionApplyActions();
+			arpInstruction.setActions(Arrays.asList((OFAction)new OFActionOutput(OFPort.OFPP_CONTROLLER)));
+			SwitchCommands.installRule(sw, (byte)0, SwitchCommands.DEFAULT_PRIORITY,
+					matchARP, Arrays.asList((OFInstruction)arpInstruction));
 
-			// If this is the host's switch
+			// Rule to forward IP packets to table 1
+			OFInstructionGotoTable gotoTable = new OFInstructionGotoTable();
+			gotoTable.setTableId(this.table);
+			SwitchCommands.installRule(sw, (byte)0, SwitchCommands.DEFAULT_PRIORITY,
+					matchIP, Arrays.asList((OFInstruction)gotoTable));
+
+			// Install table 1 rules for routing
 			if(sw.getId() == host.getSwitch().getId()) {
-				// Add rule to forward to host's port
-				OFActionOutput action = new OFActionOutput(host.getPort());
 				OFInstructionApplyActions instruction = new OFInstructionApplyActions();
-				instruction.setActions(Arrays.asList((OFAction)action));
+				instruction.setActions(Arrays.asList((OFAction)new OFActionOutput(host.getPort())));
 				SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
-						match, Arrays.asList((OFInstruction)instruction));
-			}
-			// Otherwise find next hop on path to host's switch
-			else {
-				// Get path from current switch to host's switch
+						matchIP, Arrays.asList((OFInstruction)instruction));
+			} else {
 				Map<Long, Node> paths = routingManager.getShortestPaths().get(sw.getId());
-				if(paths != null) {
+				if(paths != null && paths.get(host.getSwitch().getId()) != null) {
 					Node path = paths.get(host.getSwitch().getId());
-					if(path != null) {
-						// Add rule to forward to next hop
-						OFActionOutput action = new OFActionOutput(path.srcPort);
-						OFInstructionApplyActions instruction = new OFInstructionApplyActions();
-						instruction.setActions(Arrays.asList((OFAction)action));
-						SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
-								match, Arrays.asList((OFInstruction)instruction));
-					}
+					OFInstructionApplyActions instruction = new OFInstructionApplyActions();
+					instruction.setActions(Arrays.asList((OFAction)new OFActionOutput(path.srcPort)));
+					SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
+							matchIP, Arrays.asList((OFInstruction)instruction));
 				}
 			}
 		}
 	}
-
 	void configHosts(Collection<Host> hosts) {
 		for(Host h : hosts) {
 			configureFlowTable(h);
