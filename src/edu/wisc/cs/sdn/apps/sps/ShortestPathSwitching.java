@@ -208,8 +208,10 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		removeRules(host);
-		updateRules(host);
+		for (Host host : getHosts()) {
+			removeRules(host);
+			updateRules(host);
+		}
 		/*********************************************************************/
 	}
 
@@ -299,12 +301,12 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 
 	public void updateRules(Host host) {
 		if (!host.isAttachedToSwitch() || host.getIPv4Address() == null) {
-			if (isLog)
+			if (isLogging)
 				log.info(String.format("Host %s is not attached or doesnt get IP addr. [in updateRoutingTable()]", host.getName()));
 			return ;
 		}
 
-		if (isLog)
+		if (isLogging)
 			log.info(String.format("Host %s, ip: %s, sw: %d, rules begin to updated.", host.getName(), host.getIPv4Address(), host.getSwitch().getId()));
 
 		// get the shortest path using bellman ford
@@ -312,7 +314,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		Map<Long, Integer> shortestPaths = getShortestPaths(host.getSwitch(), getLinks(), getSwitches());
 		shortestPaths.put(host.getSwitch().getId(), host.getPort());
 
-		if (isLog)
+		if (isLogging)
 			log.info(String.format("Shortest path table for Host %s: %s.", host.getName(), shortestPaths.toString()));
 
 		// set up matches, the dst is the host's ip addr
@@ -326,7 +328,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 				continue;
 			}
 
-			if (isLog)
+			if (isLogging)
 				log.info(String.format("Adding sw %d rule for Host %s...", sw.getId(), host.getName()));
 
 			OFAction action = new OFActionOutput(shortestPaths.get(sw.getId()));
@@ -340,13 +342,13 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			);
 		}
 
-		if (isLog)
+		if (isLogging)
 			log.info(String.format("Host %s rules update complete.", host.getName()));
 	}
 
 	private void removeRules(Host host) {
 		if (!host.isAttachedToSwitch() || host.getIPv4Address() == null) {
-			if (isLog)
+			if (isLogging)
 				log.info(String.format("Host %s is not attached or doesnt get IP addr. [in clearRules()]",
 						host.getName()));
 			return ;
@@ -361,7 +363,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			SwitchCommands.removeRules(sw, table, match);
 		}
 
-		if (isLog)
+		if (isLogging)
 			log.info(String.format("Host %s rules are cleared",
 					host.getName()));
 	}
