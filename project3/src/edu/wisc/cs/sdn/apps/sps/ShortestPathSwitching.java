@@ -10,6 +10,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.openflow.protocol.OFPort;
+import org.openflow.protocol.instruction.OFInstructionGotoTable;
 import org.openflow.protocol.OFMatch;
 import org.openflow.protocol.action.OFAction;
 import org.openflow.protocol.action.OFActionOutput;
@@ -148,7 +150,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			// Install table 0 rules first
 			// Rule to send ARP to controller
 			OFInstructionApplyActions arpInstruction = new OFInstructionApplyActions();
-			arpInstruction.setActions(Arrays.asList((OFAction)new OFActionOutput(OFPort.OFPP_CONTROLLER)));
+			arpInstruction.setActions(Arrays.asList((OFAction)new OFActionOutput(OFPort.OFPP_CONTROLLER.getValue())));
 			SwitchCommands.installRule(sw, (byte)0, SwitchCommands.DEFAULT_PRIORITY,
 					matchARP, Arrays.asList((OFInstruction)arpInstruction));
 
