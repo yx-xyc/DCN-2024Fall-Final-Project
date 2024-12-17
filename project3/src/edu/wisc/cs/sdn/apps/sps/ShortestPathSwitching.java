@@ -200,6 +200,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			
 			/*****************************************************************/
 			/* TODO: Update routing: add rules to route to new host          */
+			configureFlowTable(host);
 			configHosts(getHosts());
 			/*****************************************************************/
 		}
