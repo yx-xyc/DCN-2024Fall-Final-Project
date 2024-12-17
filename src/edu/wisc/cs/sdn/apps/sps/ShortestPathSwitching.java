@@ -193,6 +193,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		/*********************************************************************/
 		/* TODO: Update routing: change rules to route to host               */
 		removeRules(host);
+		updateRules(host);
 		/*********************************************************************/
 	}
 	
@@ -274,12 +275,13 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 	public Map<Long, Integer> getShortestPaths(IOFSwitch srcSwitch, Collection<Link> links, Map<Long, IOFSwitch> switches) {
 		int WEIGHT = 1;
 		Map<Long, Integer> distTo = new HashMap<Long, Integer>();	// dst -> distance
-		Map<Long, Integer> edgeTo = new HashMap<Long, Integer>();	// dst -> predecessor's port
+		Map<Long, int[]> pathInfo = new HashMap<Long, int[]>();	// dst -> predecessor's port
 		for (long sId : switches.keySet()) {
-			distTo.put(sId, Integer.MAX_VALUE - 1);
+			distTo.put(sId, Integer.MAX_VALUE);
+			pathInfo.put(sId, new int[] {-1, -1});
 		}
 		distTo.put(srcSwitch.getId(), 0);
-		for (int v = 0; v < switches.size(); v++) {
+		for (int v = 0; v < switches.size() - 2; v++) {
 			// relax
 			for (Link link: links) {
 				long src = link.getSrc(), dst = link.getDst();
