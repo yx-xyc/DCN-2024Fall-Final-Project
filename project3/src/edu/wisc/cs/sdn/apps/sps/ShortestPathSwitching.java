@@ -131,37 +131,43 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 
 	private void configureFlowTable(Host host) {
 		if(host.getIPv4Address() == null) return;
-		Map<Long, Map<Long, Node>> curMap = routingManager.getShortestPaths();
+
+		// Create match for destination IP
+		OFMatch match = new OFMatch();
+		match.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
+		match.setNetworkDestination(host.getIPv4Address());
+
+		// Get all switches
 		Map<Long, IOFSwitch> switches = getSwitches();
 
-		// Matching criteria for each switch;
-		OFMatch newMatch = new OFMatch();
-		newMatch.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
-		newMatch.setNetworkDestination(host.getIPv4Address());
+		// For each switch
+		for(IOFSwitch sw : switches.values()) {
+			// Remove existing rules
+			SwitchCommands.removeRules(sw, table, match);
 
-		// Install rules for the directly-connected router;
-		OFInstructionApplyActions newInstruction = new OFInstructionApplyActions();
-		newInstruction.setActions(Arrays.asList((OFAction) new OFActionOutput(host.getPort())));
-		IOFSwitch directSwitch = host.getSwitch();
-
-		// Sometimes this switch can be null, indicating singular device;
-		if(directSwitch != null) {
-			SwitchCommands.removeRules(directSwitch, table, newMatch);
-			SwitchCommands.installRule(directSwitch, table, SwitchCommands.DEFAULT_PRIORITY, newMatch, Arrays.asList((OFInstruction) newInstruction));
-
-			// Update rules for switches on the forwarding path;
-			for(long swId : curMap.keySet()) {
-				if(swId == directSwitch.getId()) continue;
-				Node curNode = curMap.get(swId).get(directSwitch.getId());
-				while(curNode != null) {
-					IOFSwitch curSw = switches.get(curNode.dstID);
-					if(curSw != null) {
-						OFInstructionApplyActions curInstruction = new OFInstructionApplyActions();
-						curInstruction.setActions(Arrays.asList((OFAction) new OFActionOutput(curNode.srcPort)));
-						SwitchCommands.removeRules(curSw, table, newMatch);
-						SwitchCommands.installRule(curSw, table, SwitchCommands.DEFAULT_PRIORITY, newMatch, Arrays.asList((OFInstruction) curInstruction));
+			// If this is the host's switch
+			if(sw.getId() == host.getSwitch().getId()) {
+				// Add rule to forward to host's port
+				OFActionOutput action = new OFActionOutput(host.getPort());
+				OFInstructionApplyActions instruction = new OFInstructionApplyActions();
+				instruction.setActions(Arrays.asList((OFAction)action));
+				SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
+						match, Arrays.asList((OFInstruction)instruction));
+			}
+			// Otherwise find next hop on path to host's switch
+			else {
+				// Get path from current switch to host's switch
+				Map<Long, Node> paths = routingManager.getShortestPaths().get(sw.getId());
+				if(paths != null) {
+					Node path = paths.get(host.getSwitch().getId());
+					if(path != null) {
+						// Add rule to forward to next hop
+						OFActionOutput action = new OFActionOutput(path.srcPort);
+						OFInstructionApplyActions instruction = new OFInstructionApplyActions();
+						instruction.setActions(Arrays.asList((OFAction)action));
+						SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
+								match, Arrays.asList((OFInstruction)instruction));
 					}
-					curNode = curNode.next;
 				}
 			}
 		}
