@@ -9,5 +9,5 @@ net.floodlightcontroller.linkdiscovery.internal.LinkDiscoveryManager,\
 net.floodlightcontroller.topology.TopologyManager,\
 net.floodlightcontroller.perfmon.PktInProcessingTime,\
 edu.wisc.cs.sdn.apps.util.ArpServer,\
-edu.wisc.cs.sdn.apps.l3routing.L3Routing
-edu.wisc.cs.sdn.apps.l3routing.L3Routing.table = 0
+edu.wisc.cs.sdn.apps.sps.ShortestPathSwitching
+edu.wisc.cs.sdn.apps.sps.ShortestPathSwitching.table = 0
