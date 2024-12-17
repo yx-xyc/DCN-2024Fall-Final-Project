@@ -1,11 +1,6 @@
 package edu.wisc.cs.sdn.apps.loadbalancer;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
+import java.util.*;
 
 import org.openflow.protocol.action.OFAction;
 import org.openflow.protocol.action.OFActionOutput;
@@ -58,6 +53,7 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 	
 	private static final byte TCP_FLAG_SYN = 0x02;
 	private static final byte TCP_FLAG_RST = 0x04;
+	private static final short HARD_TIMEOUT = 0;
 	private static final short IDLE_TIMEOUT = 20;
 
 	// Interface to the logging system
@@ -216,11 +212,6 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 		/*       reset; ignore all other packets                             */
 		short curPacketType = ethPkt.getEtherType();
 		if (curPacketType == Ethernet.TYPE_ARP) {
-			if (isLogging)
-				log.info(String.format("Received ARP request for virtual IP %s from %s",
-						IPv4.fromIPv4Address(destVirtualIP),
-						MACAddress.valueOf(arpPkt.getSenderHardwareAddress())));
-
 			// Get the payload of current ethPkt as an ARP packet, and obtain its destination IP (virtual IP value);
 			ARP arpContent = (ARP) ethPkt.getPayload();
 			int destVirtualIP = IPv4.toIPv4Address(arpContent.getTargetProtocolAddress());
@@ -254,10 +245,10 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 				if (isLogging)
 					log.info("TCP_FLAG_SYN Rule");
 
-				int clientIP = ipContent.getSourceAddress();
-				short clientPort = tcpContent.getSourcePort();
+				int clientIP = ipPkt.getSourceAddress();
+				short clientPort = tcpPkt.getSourcePort();
 				int curLoadBalancerHostIP = instances.get(destVirtualIP).getNextHostIP();
-				short curLoadBalancerHostPort = tcpContent.getDestinationPort();
+				short curLoadBalancerHostPort = tcpPkt.getDestinationPort();
 				byte[] curLoadBalancerHostMAC = getHostMACAddress(curLoadBalancerHostIP);
 				byte[] destVirtualMAC = instances.get(destVirtualIP).getVirtualMAC();
 
@@ -305,9 +296,9 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 				SwitchCommands.installRule(sw, table, SwitchCommands.MAX_PRIORITY, outMatch, instList, HARD_TIMEOUT, IDLE_TIMEOUT);
 			} else {
 				// Addresses;
-				int clientIP = ipContent.getSourceAddress();
-				short clientPort = tcpContent.getSourcePort();
-				short curLoadBalancerHostPort = tcpContent.getDestinationPort();
+				int clientIP = ipPkt.getSourceAddress();
+				short clientPort = tcpPkt.getSourcePort();
+				short curLoadBalancerHostPort = tcpPkt.getDestinationPort();
 
 				// Construct TCP RESET reply;
 				TCP tcpReplyContent = new TCP();
@@ -334,7 +325,7 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 		} else {
 			if (isLogging)
 				log.info("Other TCP Rule");
-
+			IPv4 ipPkt = (IPv4) ethPkt.getPayload();
 			ipPkt.setFlags(TCP_FLAG_RST);
 			ipPkt.setDestinationAddress(ipPkt.getSourceAddress());
 			ipPkt.setSourceAddress(ipPkt.getDestinationAddress());
