@@ -176,15 +176,21 @@ public class RoutingManager {
             IOFSwitch hostSwitch = host.getSwitch();
             int hostPort = host.getPort();
 
-            OFMatch match = new OFMatch();
-            match.setDataLayerType(Ethernet.TYPE_IPv4);
+            // First, create match for IPv4 packets
+            OFMatch ipMatch = new OFMatch();
+            ipMatch.setDataLayerType(Ethernet.TYPE_IPv4);
             byte[] macBytes = new byte[6];
             long mac = host.getMACAddress();
             for (int i = 5; i >= 0; i--) {
                 macBytes[i] = (byte) (mac & 0xFF);
                 mac >>= 8;
             }
-            match.setDataLayerDestination(macBytes);
+            ipMatch.setDataLayerDestination(macBytes);
+
+            // Create match for ARP packets
+            OFMatch arpMatch = new OFMatch();
+            arpMatch.setDataLayerType(Ethernet.TYPE_ARP);
+            arpMatch.setDataLayerDestination(macBytes);
 
             Map<Long, Path> paths = graph.computeShortestPaths(hostSwitch.getId());
 
@@ -201,25 +207,61 @@ public class RoutingManager {
                     outputPort = path.getNextHopPort();
                 }
 
+                // Create action to output to the correct port
                 OFActionOutput action = new OFActionOutput(outputPort);
                 List<OFAction> actions = new ArrayList<OFAction>();
                 actions.add(action);
 
+                // Create instruction to apply the actions
                 OFInstructionApplyActions instruction = new OFInstructionApplyActions();
                 instruction.setActions(actions);
                 List<OFInstruction> instructions = new ArrayList<OFInstruction>();
                 instructions.add(instruction);
 
-                boolean installed = SwitchCommands.installRule(sw, flowTableId,
-                        SwitchCommands.DEFAULT_PRIORITY, match, instructions);
-                if (installed) {
-                    log.info(String.format("Installed flow rule on switch %s to route to host %s",
+                // Install rule for IPv4 traffic
+                boolean installedIp = SwitchCommands.installRule(sw, flowTableId,
+                        SwitchCommands.DEFAULT_PRIORITY, ipMatch, instructions);
+                if (installedIp) {
+                    log.info(String.format("Installed IPv4 flow rule on switch %s to route to host %s",
                             sw.getStringId(), host.getName()));
                 } else {
-                    log.error(String.format("Failed to install flow rule on switch %s",
+                    log.error(String.format("Failed to install IPv4 flow rule on switch %s",
+                            sw.getStringId()));
+                }
+
+                // Install rule for ARP traffic
+                boolean installedArp = SwitchCommands.installRule(sw, flowTableId,
+                        SwitchCommands.DEFAULT_PRIORITY, arpMatch, instructions);
+                if (installedArp) {
+                    log.info(String.format("Installed ARP flow rule on switch %s to route to host %s",
+                            sw.getStringId(), host.getName()));
+                } else {
+                    log.error(String.format("Failed to install ARP flow rule on switch %s",
                             sw.getStringId()));
                 }
             }
+        }
+
+        // Install table-miss flow entry
+        for (IOFSwitch sw : switches) {
+            // Match all packets
+            OFMatch matchAll = new OFMatch();
+
+            // Create action to send to controller
+            OFActionOutput actionController = new OFActionOutput(OFPort.OFPP_CONTROLLER);
+            List<OFAction> actionsController = new ArrayList<OFAction>();
+            actionsController.add(actionController);
+
+            // Create instruction
+            OFInstructionApplyActions instructionController = new OFInstructionApplyActions();
+            instructionController.setActions(actionsController);
+            List<OFInstruction> instructionsController = new ArrayList<OFInstruction>();
+            instructionsController.add(instructionController);
+
+            // Install table-miss entry
+            SwitchCommands.installRule(sw, flowTableId,
+                    (short)(SwitchCommands.DEFAULT_PRIORITY - 1),  // Lower priority
+                    matchAll, instructionsController);
         }
     }
 }
