@@ -16,8 +16,8 @@ import org.openflow.protocol.action.OFActionOutput;
 import org.openflow.protocol.instruction.OFInstruction;
 import org.openflow.protocol.instruction.OFInstructionApplyActions;
 
-import edu.wisc.cs.sdn.apps.sps.Routing;
-import edu.wisc.cs.sdn.apps.sps.Routing.Node;
+import edu.wisc.cs.sdn.apps.sps.RoutingManager;
+import edu.wisc.cs.sdn.apps.sps.RoutingManager.Node;
 import edu.wisc.cs.sdn.apps.util.Host;
 import edu.wisc.cs.sdn.apps.util.SwitchCommands;
 
