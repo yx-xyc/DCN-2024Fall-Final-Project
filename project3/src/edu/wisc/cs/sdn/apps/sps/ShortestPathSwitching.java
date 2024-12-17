@@ -134,50 +134,32 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 	private void configureFlowTable(Host host) {
 		if(host.getIPv4Address() == null) return;
 
-		// Match for IP packets to host
-		OFMatch matchIP = new OFMatch();
-		matchIP.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
-		matchIP.setNetworkDestination(host.getIPv4Address());
+		OFMatch match = new OFMatch();
+		match.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
+		match.setNetworkDestination(host.getIPv4Address());
 
-		// Match for ARP packets
-		OFMatch matchARP = new OFMatch();
-		matchARP.setDataLayerType(OFMatch.ETH_TYPE_ARP);
+		// Table 0: Forward to table 1
+		OFInstructionGotoTable gotoTable = new OFInstructionGotoTable();
+		gotoTable.setTableId(this.table);
 
-		// Get all switches
-		Map<Long, IOFSwitch> switches = getSwitches();
+		// Table 1: Output to correct port
+		OFInstructionApplyActions outputAction = new OFInstructionApplyActions();
+		outputAction.setActions(Arrays.asList((OFAction)new OFActionOutput(host.getPort())));
 
-		for(IOFSwitch sw : switches.values()) {
-			// Install table 0 rules first
-			// Rule to send ARP to controller
-			OFInstructionApplyActions arpInstruction = new OFInstructionApplyActions();
-			arpInstruction.setActions(Arrays.asList((OFAction)new OFActionOutput(OFPort.OFPP_CONTROLLER.getValue())));
+		// Install rules on all switches
+		for(IOFSwitch sw : getSwitches().values()) {
+			// Remove old rules first
+			SwitchCommands.removeRules(sw, (byte)0, match);
+			SwitchCommands.removeRules(sw, table, match);
+
+			// Install new rules
 			SwitchCommands.installRule(sw, (byte)0, SwitchCommands.DEFAULT_PRIORITY,
-					matchARP, Arrays.asList((OFInstruction)arpInstruction));
-
-			// Rule to forward IP packets to table 1
-			OFInstructionGotoTable gotoTable = new OFInstructionGotoTable();
-			gotoTable.setTableId(this.table);
-			SwitchCommands.installRule(sw, (byte)0, SwitchCommands.DEFAULT_PRIORITY,
-					matchIP, Arrays.asList((OFInstruction)gotoTable));
-
-			// Install table 1 rules for routing
-			if(sw.getId() == host.getSwitch().getId()) {
-				OFInstructionApplyActions instruction = new OFInstructionApplyActions();
-				instruction.setActions(Arrays.asList((OFAction)new OFActionOutput(host.getPort())));
-				SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
-						matchIP, Arrays.asList((OFInstruction)instruction));
-			} else {
-				Map<Long, Node> paths = routingManager.getShortestPaths().get(sw.getId());
-				if(paths != null && paths.get(host.getSwitch().getId()) != null) {
-					Node path = paths.get(host.getSwitch().getId());
-					OFInstructionApplyActions instruction = new OFInstructionApplyActions();
-					instruction.setActions(Arrays.asList((OFAction)new OFActionOutput(path.srcPort)));
-					SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
-							matchIP, Arrays.asList((OFInstruction)instruction));
-				}
-			}
+					match, Arrays.asList((OFInstruction)gotoTable));
+			SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
+					match, Arrays.asList((OFInstruction)outputAction));
 		}
 	}
+
 	void configHosts(Collection<Host> hosts) {
 		for(Host h : hosts) {
 			configureFlowTable(h);
