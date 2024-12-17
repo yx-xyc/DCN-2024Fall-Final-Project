@@ -19,7 +19,6 @@ import org.openflow.protocol.instruction.OFInstruction;
 import org.openflow.protocol.instruction.OFInstructionApplyActions;
 
 import edu.wisc.cs.sdn.apps.sps.RoutingManager;
-import edu.wisc.cs.sdn.apps.sps.RoutingManager.Node;
 import edu.wisc.cs.sdn.apps.util.Host;
 import edu.wisc.cs.sdn.apps.util.SwitchCommands;
 
@@ -132,37 +131,40 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
     { return linkDiscProv.getLinks().keySet(); }
 
 	private void configureFlowTable(Host host) {
-		if(host.getIPv4Address() == null) return;
+		if (host.getIPv4Address() == null) return;
 
+		IOFSwitch hostSwitch = host.getSwitch();
+		if (hostSwitch == null) return;
+
+		// Create match for IPv4 packets to host
 		OFMatch match = new OFMatch();
 		match.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
 		match.setNetworkDestination(host.getIPv4Address());
 
-		// Table 0: Forward to table 1
-		OFInstructionGotoTable gotoTable = new OFInstructionGotoTable();
-		gotoTable.setTableId(this.table);
+		// Install rule on host's direct switch
+		OFInstructionApplyActions hostActions = new OFInstructionApplyActions();
+		hostActions.setActions(Arrays.asList((OFAction)new OFActionOutput(host.getPort())));
 
-		// Table 1: Output to correct port
-		OFInstructionApplyActions outputAction = new OFInstructionApplyActions();
-		outputAction.setActions(Arrays.asList((OFAction)new OFActionOutput(host.getPort())));
+		SwitchCommands.removeRules(hostSwitch, table, match);
+		SwitchCommands.installRule(hostSwitch, table,
+				SwitchCommands.DEFAULT_PRIORITY, match,
+				Arrays.asList((OFInstruction)hostActions));
 
-		// Install rules on all switches
-		for(IOFSwitch sw : getSwitches().values()) {
-			// Remove old rules first
-			SwitchCommands.removeRules(sw, (byte)0, match);
+		// Install rules on other switches
+		for (IOFSwitch sw : getSwitches().values()) {
+			if (sw.getId() == hostSwitch.getId()) continue;
+
+			Link nextHop = routingManager.getNextHop(sw.getId(), hostSwitch.getId());
+			if (nextHop == null) continue;
+
+			OFInstructionApplyActions actions = new OFInstructionApplyActions();
+			actions.setActions(Arrays.asList(
+					(OFAction)new OFActionOutput(nextHop.getSrcPort())));
+
 			SwitchCommands.removeRules(sw, table, match);
-
-			// Install new rules
-			SwitchCommands.installRule(sw, (byte)0, SwitchCommands.DEFAULT_PRIORITY,
-					match, Arrays.asList((OFInstruction)gotoTable));
-			SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY,
-					match, Arrays.asList((OFInstruction)outputAction));
-		}
-	}
-
-	void configHosts(Collection<Host> hosts) {
-		for(Host h : hosts) {
-			configureFlowTable(h);
+			SwitchCommands.installRule(sw, table,
+					SwitchCommands.DEFAULT_PRIORITY, match,
+					Arrays.asList((OFInstruction)actions));
 		}
 	}
 
@@ -183,7 +185,6 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			/*****************************************************************/
 			/* TODO: Update routing: add rules to route to new host          */
 			configureFlowTable(host);
-			configHosts(getHosts());
 			/*****************************************************************/
 		}
 	}
@@ -207,7 +208,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: remove rules to route to host               */
-		configHosts(getHosts());
+		configureFlowTable(host);
 		/*********************************************************************/
 	}
 
@@ -235,7 +236,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change rules to route to host               */
-		configHosts(getHosts());
+		configureFlowTable(host);
 		/*********************************************************************/
 	}
 	
@@ -252,7 +253,9 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
 		if (routingManager.routeGeneration(this.getLinks())) {
-			configHosts(getHosts());
+			for (Host host : getHosts()) {
+				configureFlowTable(host);
+			}
 		}
 		/*********************************************************************/
 	}
@@ -270,7 +273,9 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
 		if (routingManager.routeGeneration(this.getLinks())) {
-			configHosts(getHosts());
+			for (Host host : getHosts()) {
+				configureFlowTable(host);
+			}
 		}
 		/*********************************************************************/
 	}
@@ -303,7 +308,9 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
 		if (routingManager.routeGeneration(this.getLinks())) {
-			configHosts(getHosts());
+			for (Host host : getHosts()) {
+				configureFlowTable(host);
+			}
 		}
 		/*********************************************************************/
 	}
