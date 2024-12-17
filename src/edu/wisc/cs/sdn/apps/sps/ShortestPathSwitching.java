@@ -50,7 +50,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
     private IDeviceService deviceProv;
     
     // Switch table in which rules should be installed
-    private byte table;
+    public static byte table;
     
     // Map of hosts to devices
     private Map<IDevice,Host> knownHosts;
