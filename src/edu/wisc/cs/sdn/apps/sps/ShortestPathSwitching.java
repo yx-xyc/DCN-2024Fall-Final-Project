@@ -1,17 +1,19 @@
 package edu.wisc.cs.sdn.apps.sps;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import edu.wisc.cs.sdn.apps.util.Host;
+import edu.wisc.cs.sdn.apps.util.SwitchCommands;
+
+import org.openflow.protocol.OFMatch;
+import org.openflow.protocol.action.OFAction;
+import org.openflow.protocol.action.OFActionOutput;
+import org.openflow.protocol.instruction.OFInstruction;
+import org.openflow.protocol.instruction.OFInstructionApplyActions;
 
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFSwitch;
@@ -27,6 +29,7 @@ import net.floodlightcontroller.devicemanager.IDeviceListener;
 import net.floodlightcontroller.devicemanager.IDeviceService;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryListener;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
+import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.routing.Link;
 
 public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListener, 
@@ -51,6 +54,8 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
     
     // Map of hosts to devices
     private Map<IDevice,Host> knownHosts;
+
+	private static final boolean isLogging = false;
 
 	/**
      * Loads dependencies and initializes data structures.
@@ -135,7 +140,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			
 			/*****************************************************************/
 			/* TODO: Update routing: add rules to route to new host          */
-			
+			updateRules(host);
 			/*****************************************************************/
 		}
 	}
@@ -159,7 +164,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: remove rules to route to host               */
-		
+		updateRules(host);
 		/*********************************************************************/
 	}
 
@@ -187,7 +192,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change rules to route to host               */
-		
+		removeRules(host);
 		/*********************************************************************/
 	}
 	
@@ -203,7 +208,8 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-
+		removeRules(host);
+		updateRules(host);
 		/*********************************************************************/
 	}
 
@@ -219,7 +225,10 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		
+		for (Host host : getHosts()) {
+			removeRules(host);
+			updateRules(host);
+		}
 		/*********************************************************************/
 	}
 
@@ -250,8 +259,111 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		
+		for (Host host : getHosts()) {
+			removeRules(host);
+			updateRules(host);
+		}
 		/*********************************************************************/
+	}
+
+	/**
+	 * use bellman-ford for shortest path in directed graph
+	 * */
+	public Map<Long, Integer> getShortestPaths(IOFSwitch srcSwitch, Collection<Link> links, Map<Long, IOFSwitch> switches) {
+		int WEIGHT = 1;
+		Map<Long, Integer> distTo = new HashMap<Long, Integer>();	// dst -> distance
+		Map<Long, Integer> edgeTo = new HashMap<Long, Integer>();	// dst -> predecessor's port
+		for (long sId : switches.keySet()) {
+			distTo.put(sId, Integer.MAX_VALUE - 1);
+		}
+		distTo.put(srcSwitch.getId(), 0);
+		for (int v = 0; v < switches.size(); v++) {
+			// relax
+			for (Link link: links) {
+				long src = link.getSrc(), dst = link.getDst();
+
+				// it's a bidirectional graph, so we have to check both direction
+				if (distTo.get(dst) > distTo.get(src) + WEIGHT) {
+					distTo.put(dst, distTo.get(src) + WEIGHT);
+					edgeTo.put(dst, link.getDstPort());
+				}
+
+				if (distTo.get(src) > distTo.get(dst) + WEIGHT) {
+					distTo.put(src, distTo.get(dst) + WEIGHT);
+					edgeTo.put(src, link.getSrcPort());
+				}
+			}
+		}
+		return edgeTo;
+	}
+
+	public void updateRules(Host host) {
+		if (!host.isAttachedToSwitch() || host.getIPv4Address() == null) {
+			if (isLog)
+				log.info(String.format("Host %s is not attached or doesnt get IP addr. [in updateRoutingTable()]", host.getName()));
+			return ;
+		}
+
+		if (isLog)
+			log.info(String.format("Host %s, ip: %s, sw: %d, rules begin to updated.", host.getName(), host.getIPv4Address(), host.getSwitch().getId()));
+
+		// get the shortest path using bellman ford
+		// and have to connect the host to its default switch by put one entry in map
+		Map<Long, Integer> shortestPaths = getShortestPaths(host.getSwitch(), getLinks(), getSwitches());
+		shortestPaths.put(host.getSwitch().getId(), host.getPort());
+
+		if (isLog)
+			log.info(String.format("Shortest path table for Host %s: %s.", host.getName(), shortestPaths.toString()));
+
+		// set up matches, the dst is the host's ip addr
+		OFMatch match = new OFMatch()
+				.setDataLayerType(Ethernet.TYPE_IPv4)
+				.setNetworkDestination(OFMatch.ETH_TYPE_IPV4, host.getIPv4Address());
+
+		// insert rules for each switch if its id contained in the SPs map.
+		for (IOFSwitch sw: getSwitches().values()) {
+			if (!shortestPaths.containsKey(sw.getId())) {
+				continue;
+			}
+
+			if (isLog)
+				log.info(String.format("Adding sw %d rule for Host %s...", sw.getId(), host.getName()));
+
+			OFAction action = new OFActionOutput(shortestPaths.get(sw.getId()));
+			OFInstruction instruction = new OFInstructionApplyActions(Arrays.asList(action));
+			SwitchCommands.installRule(
+					sw,
+					table,
+					SwitchCommands.DEFAULT_PRIORITY,
+					match,
+					Arrays.asList(instruction)
+			);
+		}
+
+		if (isLog)
+			log.info(String.format("Host %s rules update complete.", host.getName()));
+	}
+
+	private void removeRules(Host host) {
+		if (!host.isAttachedToSwitch() || host.getIPv4Address() == null) {
+			if (isLog)
+				log.info(String.format("Host %s is not attached or doesnt get IP addr. [in clearRules()]",
+						host.getName()));
+			return ;
+		}
+
+		// remove rules in all switches with match
+		OFMatch match = new OFMatch()
+				.setDataLayerType(Ethernet.TYPE_IPv4)
+				.setNetworkDestination(OFMatch.ETH_TYPE_IPV4, host.getIPv4Address());
+
+		for (IOFSwitch sw: getSwitches().values()) {
+			SwitchCommands.removeRules(sw, table, match);
+		}
+
+		if (isLog)
+			log.info(String.format("Host %s rules are cleared",
+					host.getName()));
 	}
 
 	/**
