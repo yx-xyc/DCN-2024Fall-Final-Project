@@ -248,7 +248,7 @@ public class RoutingManager {
             OFMatch matchAll = new OFMatch();
 
             // Create action to send to controller
-            OFActionOutput actionController = new OFActionOutput(OFPort.OFPP_CONTROLLER);
+            OFActionOutput actionController = new OFActionOutput((short)0xffff);  // OFPP_CONTROLLER in OpenFlow 1.0
             List<OFAction> actionsController = new ArrayList<OFAction>();
             actionsController.add(actionController);
 
