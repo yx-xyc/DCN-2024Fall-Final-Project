@@ -153,30 +153,49 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 		/*       balancer IP to the controller                               */
 		/*       (2) ARP packets to the controller, and                      */
 		/*       (3) all other packets to the next rule table in the switch  */
-		for (int virtualIP : instances.keySet()) {
-			OFInstructionApplyActions newInst = new OFInstructionApplyActions();
-			newInst.setActions(Arrays.asList((OFAction) new OFActionOutput().setPort(OFPort.OFPP_CONTROLLER.getValue())));
-			List<OFInstruction> instList = Arrays.asList((OFInstruction) newInst);
+		for (int vIP: instances.keySet()) {
+			// (1): packets from new connections to each virtual loadbalancer ip to controller
+			OFMatch vipMatch = new OFMatch()
+					.setDataLayerType(OFMatch.ETH_TYPE_IPV4)
+					.setNetworkDestination(OFMatch.ETH_TYPE_IPV4, vIP);
 
-			// ARP matching rule;
-			OFMatch arpMatch = new OFMatch();
-			arpMatch.setDataLayerType(OFMatch.ETH_TYPE_ARP);
-			arpMatch.setField(OFOXMFieldType.ARP_TPA, virtualIP);
+			OFAction vipAction = new OFActionOutput(OFPort.OFPP_CONTROLLER);
+			OFInstruction vipInstruction = new OFInstructionApplyActions(Arrays.asList(vipAction));
+			SwitchCommands.installRule(
+					sw,
+					table,
+					SwitchCommands.DEFAULT_PRIORITY,
+					vipMatch,
+					Arrays.asList(vipInstruction)
+			);
 
-			// Install ARP rule to the new switch;
-			SwitchCommands.removeRules(sw, table, arpMatch);
-			SwitchCommands.installRule(sw, table, (short) (SwitchCommands.DEFAULT_PRIORITY + 1), arpMatch, instList);
+			// (2): arp to controller
+			OFMatch arpMatch = new OFMatch()
+					.setDataLayerType(OFMatch.ETH_TYPE_ARP)
+					.setNetworkDestination(OFMatch.ETH_TYPE_IPV4, vIP);
 
-			// TCP matching rule;
-			OFMatch tcpMatch = new OFMatch();
-			tcpMatch.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
-			tcpMatch.setNetworkDestination(virtualIP);
-
-			// Install TCP rule to the new switch;
-			SwitchCommands.removeRules(sw, table, tcpMatch);
-			SwitchCommands.installRule(sw, table, (short) (SwitchCommands.DEFAULT_PRIORITY + 1), tcpMatch, instList);
-
+			OFAction arpAction = new OFActionOutput(OFPort.OFPP_CONTROLLER);
+			OFInstruction arpInstruction = new OFInstructionApplyActions(Arrays.asList(arpAction));
+			SwitchCommands.installRule(
+					sw,
+					table,
+					SwitchCommands.DEFAULT_PRIORITY,
+					arpMatch,
+					Arrays.asList(arpInstruction)
+			);
 		}
+
+		// (3). other to next rule table
+		OFMatch otherMatch = new OFMatch()
+				.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
+		OFInstruction otherInstruction = new OFInstructionGotoTable(ShortestPathSwitching.table);
+		SwitchCommands.installRule(
+				sw,
+				table,
+				SwitchCommands.DEFAULT_PRIORITY,
+				otherMatch,
+				Arrays.asList(otherInstruction)
+		);
 		// Installing rules for any other packets that needs to go to the next table;
 		OFInstructionGotoTable changeTableInst = new OFInstructionGotoTable(ShortestPathSwitching.table);
 		SwitchCommands.installRule(sw, table, SwitchCommands.DEFAULT_PRIORITY, new OFMatch(), Arrays.asList((OFInstruction) changeTableInst));
@@ -210,131 +229,143 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 		/*       connection-specific rules to rewrite IP and MAC addresses;  */
 		/*       for all other TCP packets sent to a virtual IP, send a TCP  */
 		/*       reset; ignore all other packets                             */
-		short curPacketType = ethPkt.getEtherType();
-		if (curPacketType == Ethernet.TYPE_ARP) {
-			// Get the payload of current ethPkt as an ARP packet, and obtain its destination IP (virtual IP value);
-			ARP arpContent = (ARP) ethPkt.getPayload();
-			int destVirtualIP = IPv4.toIPv4Address(arpContent.getTargetProtocolAddress());
-			if(arpContent.getOpCode() != ARP.OP_REQUEST || !(instances.keySet().contains(destVirtualIP))) {
+
+		/*********************************************************************/
+		short ethernetType = ethPkt.getEtherType();
+		if (ethernetType == Ethernet.TYPE_ARP) {
+			ARP arpPkt = (ARP) ethPkt.getPayload();
+
+			// return if not an ARP for IPv4 addr
+			if (arpPkt.getOpCode() != ARP.OP_REQUEST || arpPkt.getProtocolType() != ARP.PROTO_TYPE_IP) {
 				return Command.CONTINUE;
 			}
-			// log.info("Destination IP address: " + destVirtualIP);
-			// Construct ARP reply;
-			arpContent.setOpCode(ARP.OP_REPLY);
-			// L2 address;
-			arpContent.setTargetHardwareAddress(arpContent.getSenderHardwareAddress());
-			arpContent.setSenderHardwareAddress(instances.get(destVirtualIP).getVirtualMAC());
-			// L3 address;
-			arpContent.setTargetProtocolAddress(arpContent.getSenderProtocolAddress());
-			arpContent.setSenderProtocolAddress(destVirtualIP);
 
-			// Encapsule this packet into a ethernet frame;
-			ethPkt.setDestinationMACAddress(ethPkt.getSourceMACAddress());
-			ethPkt.setSourceMACAddress(instances.get(destVirtualIP).getVirtualMAC());
+			int vIP = IPv4.toIPv4Address(arpPkt.getTargetProtocolAddress());
+			LoadBalancerInstance loadBalancer = this.instances.get(vIP);
 
-			// send this packet using switch comands
-			SwitchCommands.sendPacket(sw, (short) pktIn.getInPort(), ethPkt);
-		} else if (curPacketType == Ethernet.TYPE_IPv4) {
+			if (isLogging)
+				log.info(String.format("Received ARP request for virtual IP %s from %s",
+						IPv4.fromIPv4Address(vIP),
+						MACAddress.valueOf(arpPkt.getSenderHardwareAddress())));
+
+			if (loadBalancer == null) {
+				return Command.CONTINUE;
+			}
+
+			ARP replyARP = new ARP()
+					.setHardwareType(ARP.HW_TYPE_ETHERNET)
+					.setProtocolType(ARP.PROTO_TYPE_IP)
+					.setHardwareAddressLength(arpPkt.getHardwareAddressLength())
+					.setProtocolAddressLength(arpPkt.getProtocolAddressLength())
+					.setOpCode(ARP.OP_REPLY)
+					.setSenderProtocolAddress(vIP)
+					.setSenderHardwareAddress(loadBalancer.getVirtualMAC())
+					.setTargetHardwareAddress(arpPkt.getSenderHardwareAddress())
+					.setTargetProtocolAddress(arpPkt.getSenderProtocolAddress());
+
+			Ethernet replyEther = (Ethernet) new Ethernet()
+					.setEtherType(Ethernet.TYPE_ARP)
+					.setDestinationMACAddress(ethPkt.getSourceMACAddress())
+					.setSourceMACAddress(loadBalancer.getVirtualMAC())
+					.setPayload(replyARP);
+
+			if (isLogging)
+				log.info(String.format("Sending ARP reply %s -> %s",
+						IPv4.fromIPv4Address(vIP),
+						MACAddress.valueOf(loadBalancer.getVirtualMAC())));
+
+			SwitchCommands.sendPacket(sw, (short) pktIn.getInPort(), replyEther);
+		} else if (ethernetType == Ethernet.TYPE_IPv4) {
 			IPv4 ipPkt = (IPv4) ethPkt.getPayload();
-			int destVirtualIP = ipPkt.getDestinationAddress();
-			if (ipPkt.getProtocol() != IPv4.PROTOCOL_TCP || !(instances.keySet().contains(destVirtualIP))) {
+			if (ipPkt.getProtocol() != IPv4.PROTOCOL_TCP) {
 				return Command.CONTINUE;
 			}
+
 			TCP tcpPkt = (TCP) ipPkt.getPayload();
 			if (tcpPkt.getFlags() == TCP_FLAG_SYN) {
 				if (isLogging)
 					log.info("TCP_FLAG_SYN Rule");
 
-				int clientIP = ipPkt.getSourceAddress();
-				short clientPort = tcpPkt.getSourcePort();
-				int curLoadBalancerHostIP = instances.get(destVirtualIP).getNextHostIP();
-				short curLoadBalancerHostPort = tcpPkt.getDestinationPort();
-				byte[] curLoadBalancerHostMAC = getHostMACAddress(curLoadBalancerHostIP);
-				byte[] destVirtualMAC = instances.get(destVirtualIP).getVirtualMAC();
+				LoadBalancerInstance loadBalancer = instances.get(ipPkt.getDestinationAddress());
+				int hostIP = loadBalancer.getNextHostIP();
+				byte[] hostMAC = this.getHostMACAddress(hostIP);
 
-				// Create match for inbound / outbound rules of a host;
-				// Inbound: src is the client, and dst is the virtual IP + true port;
-				OFMatch inMatch = new OFMatch();
-				inMatch.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
-				inMatch.setNetworkProtocol(IPv4.PROTOCOL_TCP);
-				inMatch.setNetworkSource(clientIP);
-				inMatch.setTransportSource(clientPort);
-				inMatch.setNetworkDestination(destVirtualIP);
-				inMatch.setTransportDestination(curLoadBalancerHostPort);
+				// client to servers
+				OFMatch csMatch = new OFMatch()
+						.setDataLayerType(OFMatch.ETH_TYPE_IPV4)
+						.setNetworkProtocol(OFMatch.IP_PROTO_TCP)
+						.setNetworkSource(ipPkt.getSourceAddress())
+						.setNetworkDestination(ipPkt.getDestinationAddress())
+						.setTransportSource(tcpPkt.getSourcePort())
+						.setTransportDestination(tcpPkt.getDestinationPort());
 
-				// Install inbound rule using idle timeout;
-				// Inbound action is to rewrite destination IP and MAC from virtual to actual;
-				OFInstructionApplyActions newInst = new OFInstructionApplyActions();
-				OFInstructionGotoTable changeTableInst = new OFInstructionGotoTable(ShortestPathSwitching.table);
-				OFActionSetField setMACAction = new OFActionSetField();
-				OFActionSetField setIPAction = new OFActionSetField();
-				setMACAction.setField(new OFOXMField(OFOXMFieldType.ETH_DST, curLoadBalancerHostMAC));
-				setIPAction.setField(new OFOXMField(OFOXMFieldType.IPV4_DST, curLoadBalancerHostIP));
-				newInst.setActions(Arrays.asList((OFAction) setMACAction, (OFAction) setIPAction));
-				List<OFInstruction> instList = Arrays.asList(newInst, changeTableInst);
-				SwitchCommands.installRule(sw, table, SwitchCommands.MAX_PRIORITY, inMatch, instList, HARD_TIMEOUT, IDLE_TIMEOUT);
+				OFInstruction defaultInstruction = new OFInstructionGotoTable(ShortestPathSwitching.table);
 
-				// Outbound: src is the real host IP + true port, dst is the client;
-				// Outbound action is to rewrite source IP and MAC from actual to virtual;
-				OFMatch outMatch = new OFMatch();
-				outMatch.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
-				outMatch.setNetworkProtocol(IPv4.PROTOCOL_TCP);
-				outMatch.setNetworkSource(curLoadBalancerHostIP);
-				outMatch.setTransportSource(curLoadBalancerHostPort);
-				outMatch.setNetworkDestination(clientIP);
-				outMatch.setTransportDestination(clientPort);
+				List<OFAction> csActions = new ArrayList<OFAction>();
+				csActions.add(new OFActionSetField(
+						OFOXMFieldType.ETH_DST,
+						hostMAC
+				));
+				csActions.add(new OFActionSetField(
+						OFOXMFieldType.IPV4_DST,
+						hostIP
+				));
+				OFInstruction csInstruction = new OFInstructionApplyActions(csActions);
 
-				// Install outbound rule using idle timeout;
-				newInst = new OFInstructionApplyActions();
-				changeTableInst = new OFInstructionGotoTable(ShortestPathSwitching.table);
-				setMACAction = new OFActionSetField();
-				setIPAction = new OFActionSetField();
-				setMACAction.setField(new OFOXMField(OFOXMFieldType.ETH_SRC, destVirtualMAC));
-				setIPAction.setField(new OFOXMField(OFOXMFieldType.IPV4_SRC, destVirtualIP));
-				newInst.setActions(Arrays.asList((OFAction) setMACAction, (OFAction) setIPAction));
-				instList = Arrays.asList(newInst, changeTableInst);
-				SwitchCommands.installRule(sw, table, SwitchCommands.MAX_PRIORITY, outMatch, instList, HARD_TIMEOUT, IDLE_TIMEOUT);
+				SwitchCommands.installRule(
+						sw,
+						table,
+						(short) (SwitchCommands.DEFAULT_PRIORITY + 2),
+						csMatch,
+						Arrays.asList(csInstruction, defaultInstruction),
+						SwitchCommands.NO_TIMEOUT,
+						IDLE_TIMEOUT
+				);
+
+				// servers to client
+				OFMatch scMatch = new OFMatch()
+						.setDataLayerType(OFMatch.ETH_TYPE_IPV4)
+						.setNetworkProtocol(OFMatch.IP_PROTO_TCP)
+						.setNetworkSource(hostIP)
+						.setNetworkDestination(ipPkt.getSourceAddress())
+						.setTransportSource(tcpPkt.getDestinationPort())
+						.setTransportDestination(tcpPkt.getSourcePort());
+
+				List<OFAction> scActions = new ArrayList<OFAction>();
+				scActions.add(new OFActionSetField(
+						OFOXMFieldType.IPV4_SRC,
+						ipPkt.getDestinationAddress()
+				));
+
+				scActions.add(new OFActionSetField(
+						OFOXMFieldType.ETH_SRC,
+						instances.get(ipPkt.getDestinationAddress()).getVirtualMAC()
+				));
+
+				OFInstruction scInstruction = new OFInstructionApplyActions(scActions);
+
+				SwitchCommands.installRule(
+						sw,
+						table,
+						(short) (SwitchCommands.DEFAULT_PRIORITY + 2),
+						scMatch,
+						Arrays.asList(scInstruction, defaultInstruction),
+						SwitchCommands.NO_TIMEOUT,
+						IDLE_TIMEOUT
+				);
 			} else {
-				// Addresses;
-				int clientIP = ipPkt.getSourceAddress();
-				short clientPort = tcpPkt.getSourcePort();
-				short curLoadBalancerHostPort = tcpPkt.getDestinationPort();
+				// for other TCPs
+				if (isLogging)
+					log.info("Other TCP Rule");
 
-				// Construct TCP RESET reply;
-				TCP tcpReplyContent = new TCP();
-				tcpReplyContent.setFlags(TCP_FLAG_RST);
-				tcpReplyContent.setSourcePort(curLoadBalancerHostPort);
-
-				// Construct IPv4 packet;
-				IPv4 ipReplyContent = new IPv4();
-				ipReplyContent.setProtocol(IPv4.PROTOCOL_TCP);
-				ipReplyContent.setSourceAddress(destVirtualIP);
-				ipReplyContent.setDestinationAddress(clientIP);
-				ipReplyContent.setPayload(tcpReplyContent);
-
-				// Construct Ethernet packet to encapsule IPv4;
-				Ethernet replyCarrier = new Ethernet();
-				replyCarrier.setEtherType(Ethernet.TYPE_IPv4);
-				replyCarrier.setSourceMACAddress(instances.get(destVirtualIP).getVirtualMAC());
-				replyCarrier.setDestinationMACAddress(ethPkt.getSourceMACAddress());
-				replyCarrier.setPayload(ipReplyContent);
-
-				// Send this packet using SwitchCommands.sendPacket();
-				SwitchCommands.sendPacket(sw, (short) pktIn.getInPort(), replyCarrier);
+				ipPkt.setFlags(TCP_FLAG_RST);
+				ipPkt.setDestinationAddress(ipPkt.getSourceAddress());
+				ipPkt.setSourceAddress(ipPkt.getDestinationAddress());
+				ethPkt.setDestinationMACAddress(ethPkt.getSourceMACAddress());
+				ethPkt.setSourceMACAddress(ethPkt.getSourceMACAddress());
+				SwitchCommands.sendPacket(sw, (short) pktIn.getInPort(), ethPkt);
 			}
-		} else {
-			if (isLogging)
-				log.info("Other TCP Rule");
-			IPv4 ipPkt = (IPv4) ethPkt.getPayload();
-			ipPkt.setFlags(TCP_FLAG_RST);
-			ipPkt.setDestinationAddress(ipPkt.getSourceAddress());
-			ipPkt.setSourceAddress(ipPkt.getDestinationAddress());
-			ethPkt.setDestinationMACAddress(ethPkt.getSourceMACAddress());
-			ethPkt.setSourceMACAddress(ethPkt.getSourceMACAddress());
-			SwitchCommands.sendPacket(sw, (short) pktIn.getInPort(), ethPkt);
 		}
-		/*********************************************************************/
-		
 		return Command.CONTINUE;
 	}
 	
