@@ -10,8 +10,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.openflow.protocol.OFMatch;
+import org.openflow.protocol.action.OFAction;
+import org.openflow.protocol.action.OFActionOutput;
+import org.openflow.protocol.instruction.OFInstruction;
+import org.openflow.protocol.instruction.OFInstructionApplyActions;
 
+import edu.wisc.cs.sdn.apps.sps.Routing;
+import edu.wisc.cs.sdn.apps.sps.Routing.Node;
 import edu.wisc.cs.sdn.apps.util.Host;
+import edu.wisc.cs.sdn.apps.util.SwitchCommands;
 
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFSwitch;
@@ -74,7 +82,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
         
         /*********************************************************************/
         /* TODO: Initialize other class variables, if necessary              */
-		this.routingManager = new RoutingManager(this.table);
+		this.routingManager = new RoutingManager();
         /*********************************************************************/
 	}
 
@@ -121,6 +129,50 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
     private Collection<Link> getLinks()
     { return linkDiscProv.getLinks().keySet(); }
 
+	private void configureFlowTable(Host host) {
+		if(host.getIPv4Address() == null) return;
+		Map<Long, Map<Long, Node>> curMap = routingManager.getShortestPaths();
+		Map<Long, IOFSwitch> switches = getSwitches();
+
+		// Matching criteria for each switch;
+		OFMatch newMatch = new OFMatch();
+		newMatch.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
+		newMatch.setNetworkDestination(host.getIPv4Address());
+
+		// Install rules for the directly-connected router;
+		OFInstructionApplyActions newInstruction = new OFInstructionApplyActions();
+		newInstruction.setActions(Arrays.asList((OFAction) new OFActionOutput(host.getPort())));
+		IOFSwitch directSwitch = host.getSwitch();
+
+		// Sometimes this switch can be null, indicating singular device;
+		if(directSwitch != null) {
+			SwitchCommands.removeRules(directSwitch, table, newMatch);
+			SwitchCommands.installRule(directSwitch, table, SwitchCommands.DEFAULT_PRIORITY, newMatch, Arrays.asList((OFInstruction) newInstruction));
+
+			// Update rules for switches on the forwarding path;
+			for(long swId : curMap.keySet()) {
+				if(swId == directSwitch.getId()) continue;
+				Node curNode = curMap.get(swId).get(directSwitch.getId());
+				while(curNode != null) {
+					IOFSwitch curSw = switches.get(curNode.dstID);
+					if(curSw != null) {
+						OFInstructionApplyActions curInstruction = new OFInstructionApplyActions();
+						curInstruction.setActions(Arrays.asList((OFAction) new OFActionOutput(curNode.srcPort)));
+						SwitchCommands.removeRules(curSw, table, newMatch);
+						SwitchCommands.installRule(curSw, table, SwitchCommands.DEFAULT_PRIORITY, newMatch, Arrays.asList((OFInstruction) curInstruction));
+					}
+					curNode = curNode.next;
+				}
+			}
+		}
+	}
+
+	void configHosts(Collection<Host> hosts) {
+		for(Host h : hosts) {
+			configureFlowTable(h);
+		}
+	}
+
     /**
      * Event handler called when a host joins the network.
      * @param device information about the host
@@ -137,10 +189,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 			
 			/*****************************************************************/
 			/* TODO: Update routing: add rules to route to new host          */
-			routingManager.handleTopologyUpdate(
-					getSwitches().values(),
-					getLinks(),
-					getHosts());
+			configHosts(getHosts());
 			/*****************************************************************/
 		}
 	}
@@ -164,7 +213,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: remove rules to route to host               */
-		routingManager.removeFlowRules(host, getSwitches().values());
+		configHosts(getHosts());
 		/*********************************************************************/
 	}
 
@@ -192,11 +241,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change rules to route to host               */
-		routingManager.handleTopologyUpdate(
-				getSwitches().values(),
-				getLinks(),
-				getHosts()
-		);
+		configHosts(getHosts());
 		/*********************************************************************/
 	}
 	
@@ -212,11 +257,9 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		routingManager.handleTopologyUpdate(
-				getSwitches().values(),
-				getLinks(),
-				getHosts()
-		);
+		if (routingManager.routeGeneration(this.getLinks())) {
+			configHosts(getHosts());
+		}
 		/*********************************************************************/
 	}
 
@@ -232,11 +275,9 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		routingManager.handleTopologyUpdate(
-				getSwitches().values(),
-				getLinks(),
-				getHosts()
-		);
+		if (routingManager.routeGeneration(this.getLinks())) {
+			configHosts(getHosts());
+		}
 		/*********************************************************************/
 	}
 
@@ -267,11 +308,9 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		
 		/*********************************************************************/
 		/* TODO: Update routing: change routing rules for all hosts          */
-		routingManager.handleTopologyUpdate(
-				getSwitches().values(),
-				getLinks(),
-				getHosts()
-		);
+		if (routingManager.routeGeneration(this.getLinks())) {
+			configHosts(getHosts());
+		}
 		/*********************************************************************/
 	}
 

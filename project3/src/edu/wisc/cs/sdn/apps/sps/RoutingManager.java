@@ -1,267 +1,235 @@
 package edu.wisc.cs.sdn.apps.sps;
 
-import net.floodlightcontroller.core.IOFSwitch;
-import net.floodlightcontroller.packet.Ethernet;
-import net.floodlightcontroller.routing.Link;
-import org.openflow.protocol.OFMatch;
-import org.openflow.protocol.action.OFAction;
-import org.openflow.protocol.action.OFActionOutput;
-import org.openflow.protocol.instruction.OFInstruction;
-import org.openflow.protocol.instruction.OFInstructionApplyActions;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Stack;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import edu.wisc.cs.sdn.apps.util.Host;
-import edu.wisc.cs.sdn.apps.util.SwitchCommands;
 
-import java.util.*;
+import net.floodlightcontroller.core.IOFSwitch;
+import net.floodlightcontroller.routing.Link;
 
 public class RoutingManager {
-    private final byte flowTableId;
-    private static final Logger log = LoggerFactory.getLogger(RoutingManager.class);
+    // Log information format;
+    private static Logger log = LoggerFactory.getLogger("ROUTING_TEST_INFO");
 
-    public RoutingManager(byte flowTableId) {
-        this.flowTableId = flowTableId;
+    /**
+     * Node structure to record adjacency table entries / shortest path entries;
+     * @param dstID is the destination switch ID (adjacency table entry) or the
+     * current switch ID (path entry);
+     * @param srcPort is the port on the source switch connecting to this switch
+     * (adjacency table entry) or the port from current switch to the next switch
+     * on the path (path entry);
+     */
+    class Node {
+        long dstID;
+        int srcPort;
+        Node next;
+        Node() { }
+        Node(long dstID, int srcPort) {
+            this.dstID = dstID;
+            this.srcPort = srcPort;
+            this.next = null;
+        }
+
+        // Print the string format of a node;
+        public String toString() {
+            return "Switch " + dstID + " on port " + srcPort + ";";
+        }
+        public String toStringAsPair() {
+            return "Switch " + dstID + ".port " + srcPort;
+        }
+    }
+    private Map<Long, Node> adjacencyTable;
+    private Map<Long, Map<Long, Node>> shortestPaths;
+    private Set<Long> nodeSet;
+    private int previousLinkCnt;
+    private Map<Long, int []> distTable;
+    private Map<Long, Node> pathTable;
+    private Stack<Node> pathStack;
+
+    void Routing() {
+        adjacencyTable = new HashMap<Long, Node>();
+        shortestPaths = new HashMap<Long, Map<Long, Node>>();
+        nodeSet = new HashSet<Long>();
+        previousLinkCnt = 0;
+        distTable = new HashMap<Long, int []>();
+        pathTable = new HashMap<Long, Node>();
+        pathStack = new Stack<Node>();
     }
 
-    // Path and Graph inner classes remain exactly the same...
-    private static class Path {
-        private final List<Long> switchIds;
-        private final List<Integer> ports;
-
-        public Path() {
-            this.switchIds = new ArrayList<Long>();
-            this.ports = new ArrayList<Integer>();
-        }
-
-        public void addNode(long switchId, int port) {
-            switchIds.add(switchId);
-            ports.add(port);
-        }
-
-        public int getNextHopPort() {
-            return ports.size() > 1 ? ports.get(1) : ports.get(0);
-        }
-    }
-
-    private static class Graph {
-        private final Map<Long, Map<Long, Integer>> adjacencyList;
-        private final Map<Long, Map<Long, Integer>> portMap;
-
-        public Graph() {
-            this.adjacencyList = new HashMap<Long, Map<Long, Integer>>();
-            this.portMap = new HashMap<Long, Map<Long, Integer>>();
-        }
-
-        public void addNode(long nodeId) {
-            if (!adjacencyList.containsKey(nodeId)) {
-                adjacencyList.put(nodeId, new HashMap<Long, Integer>());
-                portMap.put(nodeId, new HashMap<Long, Integer>());
+    /**
+     * Generate topological graph as an adjacency list;
+     * @param topoLinks is the collection of links in current network;
+     */
+    public void topoGeneration(Collection<Link> topoLinks) {
+        adjacencyTable.clear();
+        for(Link l : topoLinks) {
+            long curKey = l.getSrc();
+            if(!adjacencyTable.containsKey(curKey)) {
+                adjacencyTable.put(curKey, new Node(l.getDst(), l.getSrcPort()));
             }
-        }
-
-        public void addEdge(long src, long dst, int srcPort, int dstPort) {
-            adjacencyList.get(src).put(dst, 1);
-            adjacencyList.get(dst).put(src, 1);
-            portMap.get(src).put(dst, srcPort);
-            portMap.get(dst).put(src, dstPort);
-        }
-
-        public Map<Long, Path> computeShortestPaths(long source) {
-            final Map<Long, Integer> distances = new HashMap<Long, Integer>();
-            Map<Long, Long> previousNode = new HashMap<Long, Long>();
-            Map<Long, Path> paths = new HashMap<Long, Path>();
-
-            PriorityQueue<Long> queue = new PriorityQueue<Long>(10, new Comparator<Long>() {
-                public int compare(Long a, Long b) {
-                    Integer distA = distances.containsKey(a) ? distances.get(a) : Integer.MAX_VALUE;
-                    Integer distB = distances.containsKey(b) ? distances.get(b) : Integer.MAX_VALUE;
-                    return distA.compareTo(distB);
+            else {
+                Node temp = adjacencyTable.get(curKey);
+                while(temp.next != null) {
+                    temp = temp.next;
                 }
-            });
-
-            for (Long node : adjacencyList.keySet()) {
-                distances.put(node, Integer.MAX_VALUE);
+                temp.next = new Node(l.getDst(), l.getSrcPort());
             }
-            distances.put(source, 0);
-            queue.add(source);
-
-            while (!queue.isEmpty()) {
-                long current = queue.poll();
-
-                for (Map.Entry<Long, Integer> neighbor : adjacencyList.get(current).entrySet()) {
-                    long next = neighbor.getKey();
-                    int weight = neighbor.getValue();
-                    int newDist = distances.get(current) + weight;
-
-                    if (newDist < (distances.containsKey(next) ? distances.get(next) : Integer.MAX_VALUE)) {
-                        distances.put(next, newDist);
-                        previousNode.put(next, current);
-                        queue.add(next);
-                    }
-                }
-            }
-
-            for (long node : adjacencyList.keySet()) {
-                if (node != source && distances.get(node) < Integer.MAX_VALUE) {
-                    Path path = new Path();
-                    long current = node;
-                    Stack<Long> stack = new Stack<Long>();
-                    Stack<Integer> portStack = new Stack<Integer>();
-
-                    while (current != source) {
-                        long prev = previousNode.get(current);
-                        stack.push(current);
-                        portStack.push(portMap.get(prev).get(current));
-                        current = prev;
-                    }
-                    stack.push(source);
-
-                    while (!stack.isEmpty()) {
-                        long switchId = stack.pop();
-                        int port = portStack.isEmpty() ? -1 : portStack.pop();
-                        path.addNode(switchId, port);
-                    }
-
-                    paths.put(node, path);
-                }
-            }
-
-            return paths;
         }
     }
 
-    public void handleTopologyUpdate(Collection<IOFSwitch> switches, Collection<Link> links, Collection<Host> hosts) {
-        // First, remove all existing rules
-        for (IOFSwitch sw : switches) {
-            SwitchCommands.clearTableEntries(sw, flowTableId);
+    /**
+     * Print topological graph as an adjacency list;
+     */
+    public void printTopo() {
+        for(long key : adjacencyTable.keySet()) {
+            log.info(String.format("Adjacent nodes for switch %d:", key));
+            Node temp = adjacencyTable.get(key);
+            while(temp != null) {
+                log.info(temp.toString());
+                temp = temp.next;
+            }
         }
+    }
 
-        // Create the graph and add nodes/edges
-        Graph graph = new Graph();
-        for (IOFSwitch sw : switches) {
-            graph.addNode(sw.getId());
+    /**
+     * Generate shortest paths according to current network topology;
+     * @param topoLinks is the collection of links in current network;
+     * Normally this should be obtained by getLinks();
+     */
+    public boolean routeGeneration(Collection<Link> topoLinks) {
+        // If topology not changed, then no need to further operate;
+        if(topoLinks.size() == previousLinkCnt) {
+            return false;
         }
-        for (Link link : links) {
-            graph.addEdge(link.getSrc(), link.getDst(), link.getSrcPort(), link.getDstPort());
-        }
+        previousLinkCnt = topoLinks.size();
 
-        // Install rules for each host
-        for (Host host : hosts) {
-            if (!host.isAttachedToSwitch()) {
-                continue;
+        // First create network topology and initialize shortest path table;
+        topoGeneration(topoLinks);
+        shortestPaths.clear();
+        int tableSize = adjacencyTable.size();
+        for(long curSwitchID : adjacencyTable.keySet()) {
+
+            // Initialize node set;
+            nodeSet.clear();
+            nodeSet.add(curSwitchID);
+
+            // Initialize Dijkstra calculation table;
+            distTable.clear();
+            pathTable.clear(); // Node used as Pair<Long, int> here;
+            for(long key : adjacencyTable.keySet()) {
+                if(key != curSwitchID) {
+                    distTable.put(key, new int[tableSize]);
+                    distTable.get(key)[0] = 10000;
+                    pathTable.put(key, new Node(-1L, -1));
+                }
+            }
+            Node temp = adjacencyTable.get(curSwitchID);
+            while(temp != null) {
+                if(distTable.keySet().contains(temp.dstID)) {
+                    distTable.get(temp.dstID)[0] = 1;
+                    pathTable.put(temp.dstID, new Node(curSwitchID, temp.srcPort));
+                }
+                temp = temp.next;
             }
 
-            IOFSwitch hostSwitch = host.getSwitch();
-            int hostPort = host.getPort();
+            // Dijkstra calculation below;
+            for(int i = 0; i < tableSize - 1; i ++) {
+                int minDist = Integer.MAX_VALUE;
+                long curAdded = -1L;
 
-            // Create match for IPv4 traffic
-            OFMatch ipMatch = new OFMatch();
-            ipMatch.setDataLayerType(Ethernet.TYPE_IPv4);  // Match IPv4 packets
-            byte[] macBytes = new byte[6];
-            long mac = host.getMACAddress();
-            for (int i = 5; i >= 0; i--) {
-                macBytes[i] = (byte) (mac & 0xFF);
-                mac >>= 8;
+                // Find node that is not in noseSet and distance is minimum;
+                for(long key : distTable.keySet()) {
+                    if(!nodeSet.contains(key)) {
+                        if(distTable.get(key)[i] < minDist) {
+                            minDist = distTable.get(key)[i];
+                            curAdded = key;
+                        }
+                    }
+                }
+
+                // Add to nodeSet;
+                nodeSet.add(curAdded);
+
+                // Set the next dists to prev dist;
+                Node adjNode = adjacencyTable.get(curAdded);
+                for(long key : distTable.keySet()) {
+                    if(!nodeSet.contains(key) && distTable.keySet().contains(key)) {
+                        distTable.get(key)[i + 1] = distTable.get(key)[i];
+                    }
+                }
+
+                // For each node adjacent to this newly added node, update their dist to source;
+                while(adjNode != null) {
+                    if(!nodeSet.contains(adjNode.dstID)) {
+                        int newDist = distTable.get(curAdded)[i] + 1;
+                        if(distTable.get(adjNode.dstID) != null && newDist < distTable.get(adjNode.dstID)[i + 1]) {
+                            distTable.get(adjNode.dstID)[i + 1] = newDist;
+                            pathTable.put(adjNode.dstID, new Node(curAdded, adjNode.srcPort));
+                        }
+                    }
+                    adjNode = adjNode.next;
+                }
             }
-            ipMatch.setDataLayerDestination(macBytes);
 
-            // Compute paths from all switches to this host
-            Map<Long, Path> paths = graph.computeShortestPaths(hostSwitch.getId());
-
-            // Install flow rules on each switch
-            for (IOFSwitch sw : switches) {
-                Path path = paths.get(sw.getId());
-                if (path == null) {
+            // Extract paths and add to the shortest path map;
+            shortestPaths.put(curSwitchID, new HashMap<Long, Node>());
+            pathStack.clear();
+            Map<Long, Node> curPaths = shortestPaths.get(curSwitchID);
+            for(long key : pathTable.keySet()) {
+                Node curPos = pathTable.get(key);
+                while(curPos != null && curPos.dstID != curSwitchID) {
+                    pathStack.push(curPos);
+                    curPos = pathTable.get(curPos.dstID);
+                }
+                if(curPos == null) {
                     continue;
                 }
-
-                // Determine output port
-                int outputPort;
-                if (sw.getId() == hostSwitch.getId()) {
-                    outputPort = hostPort;
-                } else {
-                    outputPort = path.getNextHopPort();
-                }
-
-                // Create output action
-                OFActionOutput outputAction = new OFActionOutput((short)outputPort);
-                ArrayList<OFAction> actions = new ArrayList<OFAction>();
-                actions.add(outputAction);
-
-                // Create instruction to apply actions
-                OFInstructionApplyActions applyActions = new OFInstructionApplyActions();
-                applyActions.setActions(actions);
-
-                ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
-                instructions.add(applyActions);
-
-                // Install the rule
-                boolean success = SwitchCommands.installRule(sw, flowTableId,
-                        SwitchCommands.DEFAULT_PRIORITY, ipMatch, instructions);
-
-                if (success) {
-                    log.info(String.format("Installed flow rule on switch %s to route to host %s via port %d",
-                            sw.getStringId(), host.getName(), outputPort));
-                } else {
-                    log.error(String.format("Failed to install flow rule on switch %s",
-                            sw.getStringId()));
+                curPaths.put(key, new Node(curPos.dstID, curPos.srcPort));
+                Node pathNode = curPaths.get(key);
+                if(pathNode != null) {
+                    while(!pathStack.empty()) {
+                        pathNode.next = new Node(pathStack.peek().dstID, pathStack.peek().srcPort);
+                        pathStack.pop();
+                        pathNode = pathNode.next;
+                    }
                 }
             }
         }
+        return true;
+    }
 
-        // Install default rule to send to controller
-        for (IOFSwitch sw : switches) {
-            // Match all packets
-            OFMatch matchAll = new OFMatch();
-
-            // Create action to send to controller
-            OFActionOutput actionController = new OFActionOutput((short)0xfffffffd); // OFPP_CONTROLLER in OF1.3
-            ArrayList<OFAction> actions = new ArrayList<OFAction>();
-            actions.add(actionController);
-
-            // Create instruction
-            OFInstructionApplyActions applyActions = new OFInstructionApplyActions();
-            applyActions.setActions(actions);
-
-            ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
-            instructions.add(applyActions);
-
-            // Install the rule with lower priority
-            boolean success = SwitchCommands.installRule(sw, flowTableId,
-                    (short)(SwitchCommands.DEFAULT_PRIORITY - 1),
-                    matchAll, instructions);
-
-            if (!success) {
-                log.error(String.format("Failed to install default rule on switch %s",
-                        sw.getStringId()));
+    /**
+     * Print current shortest path table;
+     */
+    public void printPaths() {
+        for(long srcSwitch : shortestPaths.keySet()) {
+            Map<Long, Node> curPaths = shortestPaths.get(srcSwitch);
+            for(long dstSwitch : curPaths.keySet()) {
+                log.info(String.format("Path from switch %d to switch %d:", srcSwitch, dstSwitch));
+                Node temp = curPaths.get(dstSwitch);
+                String curMsg = "";
+                while(temp != null) {
+                    curMsg += temp.toStringAsPair() + " -> ";
+                    temp = temp.next;
+                }
+                curMsg += "Destination;";
+                log.info(curMsg);
             }
+            log.info("===================================================");
         }
     }
 
-    public void removeFlowRules(Host host, Collection<IOFSwitch> switches) {
-        if (host == null || !host.isAttachedToSwitch()) {
-            return;
-        }
-
-        OFMatch match = new OFMatch();
-        match.setDataLayerType(Ethernet.TYPE_IPv4);
-        byte[] macBytes = new byte[6];
-        long mac = host.getMACAddress();
-        for (int i = 5; i >= 0; i--) {
-            macBytes[i] = (byte) (mac & 0xFF);
-            mac >>= 8;
-        }
-        match.setDataLayerDestination(macBytes);
-
-        for (IOFSwitch sw : switches) {
-            boolean removed = SwitchCommands.removeRules(sw, flowTableId, match);
-            if (removed) {
-                log.info(String.format("Removed flow rules for host %s from switch %s",
-                        host.getName(), sw.getStringId()));
-            } else {
-                log.error(String.format("Failed to remove flow rules for host %s from switch %s",
-                        host.getName(), sw.getStringId()));
-            }
-        }
+    /**
+     * Get current shortest path table;
+     * Used in flow table generation;
+     */
+    public Map<Long, Map<Long, Node>> getShortestPaths() {
+        return this.shortestPaths;
     }
 }
