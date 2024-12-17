@@ -130,6 +130,114 @@ public class RoutingManager {
         }
     }
 
+    public void handleTopologyUpdate(Collection<IOFSwitch> switches, Collection<Link> links, Collection<Host> hosts) {
+        // First, remove all existing rules
+        for (IOFSwitch sw : switches) {
+            SwitchCommands.clearTableEntries(sw, flowTableId);
+        }
+
+        // Create the graph and add nodes/edges
+        Graph graph = new Graph();
+        for (IOFSwitch sw : switches) {
+            graph.addNode(sw.getId());
+        }
+        for (Link link : links) {
+            graph.addEdge(link.getSrc(), link.getDst(), link.getSrcPort(), link.getDstPort());
+        }
+
+        // Install rules for each host
+        for (Host host : hosts) {
+            if (!host.isAttachedToSwitch()) {
+                continue;
+            }
+
+            IOFSwitch hostSwitch = host.getSwitch();
+            int hostPort = host.getPort();
+
+            // Create match for IPv4 traffic
+            OFMatch ipMatch = new OFMatch();
+            ipMatch.setDataLayerType(Ethernet.TYPE_IPv4);  // Match IPv4 packets
+            byte[] macBytes = new byte[6];
+            long mac = host.getMACAddress();
+            for (int i = 5; i >= 0; i--) {
+                macBytes[i] = (byte) (mac & 0xFF);
+                mac >>= 8;
+            }
+            ipMatch.setDataLayerDestination(macBytes);
+
+            // Compute paths from all switches to this host
+            Map<Long, Path> paths = graph.computeShortestPaths(hostSwitch.getId());
+
+            // Install flow rules on each switch
+            for (IOFSwitch sw : switches) {
+                Path path = paths.get(sw.getId());
+                if (path == null) {
+                    continue;
+                }
+
+                // Determine output port
+                int outputPort;
+                if (sw.getId() == hostSwitch.getId()) {
+                    outputPort = hostPort;
+                } else {
+                    outputPort = path.getNextHopPort();
+                }
+
+                // Create output action
+                OFActionOutput outputAction = new OFActionOutput((short)outputPort);
+                ArrayList<OFAction> actions = new ArrayList<OFAction>();
+                actions.add(outputAction);
+
+                // Create instruction to apply actions
+                OFInstructionApplyActions applyActions = new OFInstructionApplyActions();
+                applyActions.setActions(actions);
+
+                ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
+                instructions.add(applyActions);
+
+                // Install the rule
+                boolean success = SwitchCommands.installRule(sw, flowTableId,
+                        SwitchCommands.DEFAULT_PRIORITY, ipMatch, instructions);
+
+                if (success) {
+                    log.info(String.format("Installed flow rule on switch %s to route to host %s via port %d",
+                            sw.getStringId(), host.getName(), outputPort));
+                } else {
+                    log.error(String.format("Failed to install flow rule on switch %s",
+                            sw.getStringId()));
+                }
+            }
+        }
+
+        // Install default rule to send to controller
+        for (IOFSwitch sw : switches) {
+            // Match all packets
+            OFMatch matchAll = new OFMatch();
+
+            // Create action to send to controller
+            OFActionOutput actionController = new OFActionOutput((short)0xfffffffd); // OFPP_CONTROLLER in OF1.3
+            ArrayList<OFAction> actions = new ArrayList<OFAction>();
+            actions.add(actionController);
+
+            // Create instruction
+            OFInstructionApplyActions applyActions = new OFInstructionApplyActions();
+            applyActions.setActions(actions);
+
+            ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
+            instructions.add(applyActions);
+
+            // Install the rule with lower priority
+            boolean success = SwitchCommands.installRule(sw, flowTableId,
+                    (short)(SwitchCommands.DEFAULT_PRIORITY - 1),
+                    matchAll, instructions);
+
+            if (!success) {
+                log.error(String.format("Failed to install default rule on switch %s",
+                        sw.getStringId()));
+            }
+        }
+    }
+
     public void removeFlowRules(Host host, Collection<IOFSwitch> switches) {
         if (host == null || !host.isAttachedToSwitch()) {
             return;
@@ -154,114 +262,6 @@ public class RoutingManager {
                 log.error(String.format("Failed to remove flow rules for host %s from switch %s",
                         host.getName(), sw.getStringId()));
             }
-        }
-    }
-
-    public void handleTopologyUpdate(Collection<IOFSwitch> switches, Collection<Link> links, Collection<Host> hosts) {
-        Graph graph = new Graph();
-
-        for (IOFSwitch sw : switches) {
-            graph.addNode(sw.getId());
-        }
-
-        for (Link link : links) {
-            graph.addEdge(link.getSrc(), link.getDst(), link.getSrcPort(), link.getDstPort());
-        }
-
-        for (Host host : hosts) {
-            if (!host.isAttachedToSwitch()) {
-                continue;
-            }
-
-            IOFSwitch hostSwitch = host.getSwitch();
-            int hostPort = host.getPort();
-
-            // First, create match for IPv4 packets
-            OFMatch ipMatch = new OFMatch();
-            ipMatch.setDataLayerType(Ethernet.TYPE_IPv4);
-            byte[] macBytes = new byte[6];
-            long mac = host.getMACAddress();
-            for (int i = 5; i >= 0; i--) {
-                macBytes[i] = (byte) (mac & 0xFF);
-                mac >>= 8;
-            }
-            ipMatch.setDataLayerDestination(macBytes);
-
-            // Create match for ARP packets
-            OFMatch arpMatch = new OFMatch();
-            arpMatch.setDataLayerType(Ethernet.TYPE_ARP);
-            arpMatch.setDataLayerDestination(macBytes);
-
-            Map<Long, Path> paths = graph.computeShortestPaths(hostSwitch.getId());
-
-            for (IOFSwitch sw : switches) {
-                Path path = paths.get(sw.getId());
-                if (path == null) {
-                    continue;
-                }
-
-                int outputPort;
-                if (sw.getId() == hostSwitch.getId()) {
-                    outputPort = hostPort;
-                } else {
-                    outputPort = path.getNextHopPort();
-                }
-
-                // Create action to output to the correct port
-                OFActionOutput action = new OFActionOutput(outputPort);
-                List<OFAction> actions = new ArrayList<OFAction>();
-                actions.add(action);
-
-                // Create instruction to apply the actions
-                OFInstructionApplyActions instruction = new OFInstructionApplyActions();
-                instruction.setActions(actions);
-                List<OFInstruction> instructions = new ArrayList<OFInstruction>();
-                instructions.add(instruction);
-
-                // Install rule for IPv4 traffic
-                boolean installedIp = SwitchCommands.installRule(sw, flowTableId,
-                        SwitchCommands.DEFAULT_PRIORITY, ipMatch, instructions);
-                if (installedIp) {
-                    log.info(String.format("Installed IPv4 flow rule on switch %s to route to host %s",
-                            sw.getStringId(), host.getName()));
-                } else {
-                    log.error(String.format("Failed to install IPv4 flow rule on switch %s",
-                            sw.getStringId()));
-                }
-
-                // Install rule for ARP traffic
-                boolean installedArp = SwitchCommands.installRule(sw, flowTableId,
-                        SwitchCommands.DEFAULT_PRIORITY, arpMatch, instructions);
-                if (installedArp) {
-                    log.info(String.format("Installed ARP flow rule on switch %s to route to host %s",
-                            sw.getStringId(), host.getName()));
-                } else {
-                    log.error(String.format("Failed to install ARP flow rule on switch %s",
-                            sw.getStringId()));
-                }
-            }
-        }
-
-        // Install table-miss flow entry
-        for (IOFSwitch sw : switches) {
-            // Match all packets
-            OFMatch matchAll = new OFMatch();
-
-            // Create action to send to controller
-            OFActionOutput actionController = new OFActionOutput((short)0xffff);  // OFPP_CONTROLLER in OpenFlow 1.0
-            List<OFAction> actionsController = new ArrayList<OFAction>();
-            actionsController.add(actionController);
-
-            // Create instruction
-            OFInstructionApplyActions instructionController = new OFInstructionApplyActions();
-            instructionController.setActions(actionsController);
-            List<OFInstruction> instructionsController = new ArrayList<OFInstruction>();
-            instructionsController.add(instructionController);
-
-            // Install table-miss entry
-            SwitchCommands.installRule(sw, flowTableId,
-                    (short)(SwitchCommands.DEFAULT_PRIORITY - 1),  // Lower priority
-                    matchAll, instructionsController);
         }
     }
 }
