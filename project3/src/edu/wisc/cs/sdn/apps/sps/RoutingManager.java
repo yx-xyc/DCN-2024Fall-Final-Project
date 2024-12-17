@@ -1,7 +1,9 @@
 package edu.wisc.cs.sdn.apps.sps;
 
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Map;
@@ -19,7 +21,7 @@ public class RoutingManager {
     private int previousLinkCount;
 
     public RoutingManager() {
-        this.pathCache = new HashMap<>();
+        this.pathCache = new HashMap<Long, Map<Long, List<Link>>>();
         this.previousLinkCount = 0;
     }
 
@@ -30,13 +32,17 @@ public class RoutingManager {
         previousLinkCount = links.size();
 
         // Build adjacency map
-        Map<Long, Map<Long, Link>> adjacencyMap = new HashMap<>();
+        Map<Long, Map<Long, Link>> adjacencyMap = new HashMap<Long, Map<Long, Link>>();
         for (Link link : links) {
             long src = link.getSrc();
             long dst = link.getDst();
 
-            adjacencyMap.putIfAbsent(src, new HashMap<>());
-            adjacencyMap.putIfAbsent(dst, new HashMap<>());
+            if (!adjacencyMap.containsKey(src)) {
+                adjacencyMap.put(src, new HashMap<Long, Link>());
+            }
+            if (!adjacencyMap.containsKey(dst)) {
+                adjacencyMap.put(dst, new HashMap<Long, Link>());
+            }
             adjacencyMap.get(src).put(dst, link);
             // Add reverse link
             Link reverseLink = new Link(dst, link.getDstPort(), src, link.getSrcPort());
@@ -55,11 +61,14 @@ public class RoutingManager {
     }
 
     private void computePathsFromSource(Long source, Map<Long, Map<Long, Link>> adjacencyMap) {
-        Map<Long, List<Link>> paths = new HashMap<>();
-        Map<Long, Integer> distances = new HashMap<>();
-        Map<Long, Long> previous = new HashMap<>();
-        PriorityQueue<Long> queue = new PriorityQueue<>(
-                (a, b) -> distances.get(a).compareTo(distances.get(b)));
+        Map<Long, List<Link>> paths = new HashMap<Long, List<Link>>();
+        final Map<Long, Integer> distances = new HashMap<Long, Integer>();
+        Map<Long, Long> previous = new HashMap<Long, Long>();
+        PriorityQueue<Long> queue = new PriorityQueue<Long>(11, new Comparator<Long>() {
+            public int compare(Long a, Long b) {
+                return distances.get(a).compareTo(distances.get(b));
+            }
+        });
 
         // Initialize distances
         for (Long node : adjacencyMap.keySet()) {
@@ -103,7 +112,7 @@ public class RoutingManager {
 
     private List<Link> reconstructPath(Long source, Long dest, Map<Long, Long> previous,
                                        Map<Long, Map<Long, Link>> adjacencyMap) {
-        List<Link> path = new ArrayList<>();
+        List<Link> path = new ArrayList<Link>();
         Long current = dest;
 
         while (previous.get(current) != null) {

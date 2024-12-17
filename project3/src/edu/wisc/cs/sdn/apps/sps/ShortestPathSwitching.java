@@ -310,6 +310,7 @@ public class ShortestPathSwitching implements IFloodlightModule, IOFSwitchListen
 		if (routingManager.routeGeneration(this.getLinks())) {
 			for (Host host : getHosts()) {
 				configureFlowTable(host);
+
 			}
 		}
 		/*********************************************************************/
