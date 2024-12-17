@@ -157,14 +157,16 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 			// (1): packets from new connections to each virtual loadbalancer ip to controller
 			OFMatch vipMatch = new OFMatch()
 					.setDataLayerType(OFMatch.ETH_TYPE_IPV4)
+					.setNetworkProtocol(OFMatch.IP_PROTO_TCP)
 					.setNetworkDestination(OFMatch.ETH_TYPE_IPV4, vIP);
 
 			OFAction vipAction = new OFActionOutput(OFPort.OFPP_CONTROLLER);
 			OFInstruction vipInstruction = new OFInstructionApplyActions(Arrays.asList(vipAction));
+			OFInstructionGotoTable gotoTable = new OFInstructionGotoTable(ShortestPathSwitching.table);
 			SwitchCommands.installRule(
 					sw,
 					table,
-					SwitchCommands.DEFAULT_PRIORITY,
+					(short)(SwitchCommands.DEFAULT_PRIORITY + 1),
 					vipMatch,
 					Arrays.asList(vipInstruction)
 			);
@@ -186,14 +188,14 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 		}
 
 		// (3). other to next rule table
-		OFMatch otherMatch = new OFMatch()
-				.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
+//		OFMatch otherMatch = new OFMatch()
+//				.setDataLayerType(OFMatch.ETH_TYPE_IPV4);
 		OFInstruction otherInstruction = new OFInstructionGotoTable(ShortestPathSwitching.table);
 		SwitchCommands.installRule(
 				sw,
 				table,
 				SwitchCommands.DEFAULT_PRIORITY,
-				otherMatch,
+				new OFMatch(),
 				Arrays.asList(otherInstruction)
 		);
 		// Installing rules for any other packets that needs to go to the next table;
@@ -242,6 +244,9 @@ public class LoadBalancer implements IFloodlightModule, IOFSwitchListener,
 
 			int vIP = IPv4.toIPv4Address(arpPkt.getTargetProtocolAddress());
 			LoadBalancerInstance loadBalancer = this.instances.get(vIP);
+			if (loadBalancer == null) {
+				return Command.CONTINUE;
+			}
 
 			if (isLogging)
 				log.info(String.format("Received ARP request for virtual IP %s from %s",
