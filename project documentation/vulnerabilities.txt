@@ -1,0 +1,39 @@
+Basic Problems:
+1. Host Discovery Issues:
+   - Floodlight controller sometimes fails to discover all hosts in the network
+   - Results in incomplete path computation and failed connectivity tests
+   - Affects both SPS and load balancer functionality
+
+Vulnerabilities in SPS Implementation:
+1. Null Switch References
+   - Hosts may have null switch references during topology changes
+   - Occurs when switches are removed or links go down
+   - Can cause NullPointerException in path computation
+   - No proper exception handling for orphaned hosts
+
+2. Performance Issues
+   - Complete path recomputation on any topology change
+   - Bellman-Ford algorithm runs for all hosts even with minor changes
+   - High computational overhead in large networks
+   - No caching or incremental update mechanism
+
+3. Edge Case Handling
+   - Potential infinite loop in path computation with negative cycles
+   - No validation for maximum path length
+   - Missing checks for disconnected network segments
+
+Vulnerabilities in Load Balancer Implementation:
+1. TCP Connection Management
+   - Rule installation for TCP SYN packets can trigger null exceptions
+   - Inconsistent behavior in rule installation timing
+   - Possible race conditions in connection handling
+
+2. Resource Management
+   - No limit on number of concurrent connections
+   - Fixed 20-second idle timeout may not suit all scenarios
+   - No cleanup mechanism for stale connection entries
+
+3. Host Selection
+   - Simple round-robin without health checks
+   - No consideration of host load or capacity
+   - No backup host mechanism for failed servers
