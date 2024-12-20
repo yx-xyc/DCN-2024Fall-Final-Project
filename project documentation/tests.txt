@@ -1,0 +1,52 @@
+Testing Methods for Part 3 (Shortest Path Switching):
+
+1. Start Floodlight controller:
+   Execute java -jar FloodlightWithApps.jar -cf sps.prop;
+   This will use shortest path switching implementation for routing configuration.
+
+2. Start Mininet with various topologies:
+   sudo ./run_mininet.py $topo$
+   where $topo$ can be:
+   - single,3 (single switch with three hosts)
+   - linear,3 (chain of three switches)
+   - tree,2 (tree topology with depth 2)
+   - mesh,5 (complete graph with 5 switches)
+   - assign1 (custom topology)
+   - triangle (three switches in triangle)
+   - someloops (custom topology with loops)
+
+3. Test network connectivity:
+   After hosts complete ARP process in Mininet, use 'pingall' to verify:
+   - Successfully received packets indicate correct topology
+   - Proper forwarding rules installation in switches
+   - Shortest path computation accuracy
+
+4. Test topology changes:
+   Use following commands to test dynamic path recalculation:
+   - link s1 s2 down (takes down link between s1 and s2)
+   - link s1 s2 up (brings up link between s1 and s2)
+   - Run 'pingall' after each change to verify connectivity
+   - Monitor flow table changes: sudo ovs-ofctl -O OpenFlow13 dump-flows s1
+
+Testing Methods for Part 4 (Load Balancer):
+
+1. Start Floodlight controller with load balancer:
+   Execute java -jar FloodlightWithApps.jar -cf sps_balance.prop;
+   This enables both load balancer and shortest path switching functionality.
+
+2. Test basic connectivity:
+   - Follow steps from Part 3 to verify base routing functionality
+   - Ensures default rules correctly forward to SPS table
+   - Verify hosts can reach non-virtual IPs
+
+3. Test load balancer functionality:
+   From any Mininet host, execute:
+   $host$ curl $virtualIP$
+   where:
+   - $host$ can be any host in the network (e.g., h1, h2)
+   - $virtualIP$ matches those configured in sps_balance.prop
+   Successful curl response verifies:
+   - Correct ARP request handling
+   - Proper TCP connection establishment
+   - Accurate virtual IP to real host mapping
+   - Round-robin load distribution
